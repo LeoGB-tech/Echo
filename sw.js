@@ -1,6 +1,6 @@
 // Écho — service worker : rend l'app ouvrable sans réseau.
 // Les morceaux téléchargés sont dans le cache "echo-offline" (géré par la page).
-const SHELL = "echo-shell-v2";
+const SHELL = "echo-shell-v3";
 const FILES = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg", "./icon-180.png", "./icon-192.png", "./icon-512.png"];
 const CDN = /^(https:\/\/(cdn\.jsdelivr\.net|cdnjs\.cloudflare\.com|fonts\.googleapis\.com|fonts\.gstatic\.com))\//;
 

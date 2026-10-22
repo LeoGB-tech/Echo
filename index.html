@@ -401,6 +401,7 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border:0;border-radiu
   </div>
   <main id="view"></main>
   <input type="file" id="file" accept="audio/*,.mp3,.flac,.m4a,.wav,.ogg,.opus,.aac" multiple hidden>
+  <input type="file" id="folder" webkitdirectory multiple hidden>
   <input type="file" id="coverFile" accept="image/*" hidden>
 </section>
 
@@ -1059,7 +1060,13 @@ document.addEventListener("touchend", e => { clearTimeout(lpT); const row=e.targ
 
 function action(a, arg, el){
   switch(a){
-    case "upload": return $("#file").click();
+    case "upload": {
+      // Choix d'un dossier : PC et Android. L'iPhone ne sait choisir que des fichiers.
+      const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);
+      if(ios || !("webkitdirectory" in document.createElement("input"))) return $("#file").click();
+      return sheet(`<h3>Ajouter de la musique</h3>${it("files","song","Choisir des fichiers")}${it("dir","album","Choisir un dossier entier","","","sous-dossiers inclus")}<p style="color:var(--mute);font-size:13px;padding:8px 10px">Astuce : tu peux aussi glisser‑déposer des fichiers ou des dossiers n'importe où sur la page. Les morceaux déjà envoyés sont ignorés.</p>`,
+        v => { if(v==="files") $("#file").click(); if(v==="dir") $("#folder").click(); });
+    }
     case "settings": return settingsSheet();
     case "play-list": return lists[arg]?.length && playFrom(lists[arg], lists[arg][0].id, false);
     case "shuffle-list": { const l = lists[arg]; if(!l?.length) return; shuffle = true; updModes(); return playFrom(l, l[Math.floor(Math.random()*l.length)].id); }
@@ -1716,7 +1723,21 @@ let dragN = 0;
 addEventListener("dragenter", e => { if(user && e.dataTransfer?.types.includes("Files")){ dragN++; $("#drop").classList.remove("hidden"); } });
 addEventListener("dragleave", () => { if(--dragN<=0){ dragN=0; $("#drop").classList.add("hidden"); } });
 addEventListener("dragover", e => e.preventDefault());
-addEventListener("drop", e => { e.preventDefault(); dragN=0; $("#drop").classList.add("hidden"); if(user) enqueueUploads([...e.dataTransfer.files]); });
+addEventListener("drop", async e => {
+  e.preventDefault(); dragN=0; $("#drop").classList.add("hidden"); if(!user) return;
+  // Un dossier lâché sur la page est parcouru en entier, sous-dossiers compris.
+  const entries = [...(e.dataTransfer.items||[])].map(i => i.webkitGetAsEntry?.()).filter(Boolean);
+  if(!entries.length) return enqueueUploads([...e.dataTransfer.files]);
+  if(entries.some(en => en.isDirectory)) toast("Lecture du dossier…");
+  const out = [];
+  const walk = async en => {
+    if(en.isFile) return new Promise(r => en.file(f => { out.push(f); r(); }, r));
+    if(en.isDirectory){ const rd = en.createReader(); for(;;){ const batch = await new Promise(r => rd.readEntries(r, () => r([]))); if(!batch.length) break; for(const b of batch) await walk(b); } }
+  };
+  for(const en of entries) await walk(en);
+  enqueueUploads(out);
+});
+$("#folder").onchange = e => { enqueueUploads([...e.target.files]); e.target.value=""; };
 
 let trayPending = 0;
 function trayShow(title){ $("#trayTitle").textContent = title; $("#tray").classList.remove("hidden"); }
@@ -1766,8 +1787,16 @@ function putObject(path, body, type, onProg){
 }
 const upJobs = []; let upRunning = false;
 function enqueueUploads(files){
-  files = files.filter(f => f.type.startsWith("audio/") || MIME[f.name.split(".").pop().toLowerCase()]);
+  files = files.filter(f => !f.name.startsWith("._") && (f.type.startsWith("audio/") || MIME[f.name.split(".").pop().toLowerCase()]));
   if(!files.length) return toast("Aucun fichier audio");
+  // Déjà envoyé (même taille au octet près) : ignoré, on peut renvoyer un dossier sans doublons.
+  const haveSize = new Set(tracks.filter(t=>t.size).map(t => Number(t.size)));
+  upJobs.forEach(j => haveSize.add(j.f.size));
+  const before = files.length;
+  files = files.filter(f => !haveSize.has(f.size));
+  const deja = before - files.length;
+  if(deja) toast(`${deja} déjà dans ta bibliothèque, ignoré${deja>1?"s":""}`);
+  if(!files.length) return;
   if(offlineMode) return toast("Connexion requise pour envoyer");
   trayShow("Envoi");
   files.forEach(f => upJobs.push({ f, set: trayItem(f.name) }));
