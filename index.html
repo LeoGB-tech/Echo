@@ -231,8 +231,8 @@ main#view{max-width:1100px;margin:0 auto;padding:0 16px}
 .genres{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:18px}
 @media (max-width:600px){.genres{grid-template-columns:1fr 1fr;gap:10px}}
 .genre{aspect-ratio:16/9;height:auto;border-radius:10px;padding:12px 14px;text-align:left;font-weight:700;font-size:16px;display:flex;align-items:flex-end;position:relative;overflow:hidden;color:#fff;background:var(--gc,#7b5cf0)!important;isolation:isolate;box-shadow:0 1px 3px rgba(0,0,0,.12)}
-.genre .gimg{position:absolute;inset:0;width:100%;height:100%;border-radius:0;font-size:0;background-size:cover!important;background-position:center 22%!important;filter:grayscale(1) contrast(1.15) brightness(1.08);mix-blend-mode:multiply;z-index:0}
-.genre::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0) 55%,rgba(0,0,0,.28));z-index:0}
+.genre .gimg{position:absolute;inset:0;width:100%;height:100%;border-radius:0;font-size:0;background-size:cover!important;background-position:center 18%!important;z-index:0}
+.genre::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0) 62%,rgba(0,0,0,.22));z-index:0}
 .genre span{position:relative;z-index:1;text-shadow:0 1px 4px rgba(0,0,0,.25)}
 .genre:hover .gimg{transform:scale(1.04);transition:transform .4s}
 .recent-q{display:flex;align-items:center;gap:10px;padding:11px 4px;border-bottom:1px solid var(--line);width:100%;text-align:left;color:var(--a1)}
@@ -1407,7 +1407,7 @@ function refreshArtImg(name){
   const u = artUrl(name);
   document.querySelectorAll(`[data-artimg="${CSS.escape(name)}"]`).forEach(el => {
     if(u){ el.style.backgroundImage = `url('${cssUrl(u)}'),${gradFor(name)}`; el.textContent = ""; }
-    else { const a = artists.find(x=>x.name===name); const ct = a?.tracks.find(t=>coverOf(t)); el.setAttribute("style", cvStyle(ct, name)); el.textContent = ct ? "" : name.charAt(0).toUpperCase(); }
+    else { const a = artists.find(x=>x.name===name); const ct = a?.tracks.find(t=>coverOf(t)); const fl = el.style.filter; el.setAttribute("style", cvStyle(ct, name)); if(fl) el.style.filter = fl; el.textContent = ct ? "" : name.charAt(0).toUpperCase(); }
   });
 }
 // Deezer (JSONP, pas de clé)
@@ -1679,6 +1679,22 @@ const sameGenre = (a, b) => !!a && !!b && genreKey(a) === genreKey(b);
 const genreColor = g => { const k = genreKey(g); if(GENRE_COLOR[k]) return GENRE_COLOR[k]; const pal = Object.values(GENRE_COLOR); let h = 0; for(const c of k) h = (h*31 + c.charCodeAt(0)) >>> 0; return pal[h % pal.length]; };
 // artiste « tête d'affiche » d'une liste ; `used` évite de remettre la même photo sur deux cartes voisines
 let artUsed = new Set();
+// photo en « duotone » façon Apple Music : ombres = couleur du genre foncée, lumières = couleur claire
+function duoFilter(hex){
+  const id = "duo-" + hex.replace("#","");
+  if(document.getElementById(id)) return id;
+  let defs = document.getElementById("duoDefs");
+  if(!defs){ defs = document.createElementNS("http://www.w3.org/2000/svg","svg"); defs.id = "duoDefs"; defs.setAttribute("width","0"); defs.setAttribute("height","0"); defs.style.cssText = "position:absolute;width:0;height:0;pointer-events:none"; document.body.appendChild(defs); }
+  const c = [1,3,5].map(i => parseInt(hex.slice(i, i+2), 16) / 255);
+  const dark = c.map(v => (v*0.22).toFixed(3)), mid = c.map(v => v.toFixed(3)), light = c.map(v => (v + (1-v)*0.5).toFixed(3));
+  const f = document.createElementNS("http://www.w3.org/2000/svg","filter");
+  f.id = id; f.setAttribute("color-interpolation-filters","sRGB"); f.setAttribute("x","0"); f.setAttribute("y","0"); f.setAttribute("width","1"); f.setAttribute("height","1");
+  f.innerHTML = `<feColorMatrix type="matrix" values=".2126 .7152 .0722 0 0  .2126 .7152 .0722 0 0  .2126 .7152 .0722 0 0  0 0 0 1 0"/>
+    <feComponentTransfer><feFuncR type="gamma" amplitude="1" exponent=".62" offset="0"/><feFuncG type="gamma" amplitude="1" exponent=".62" offset="0"/><feFuncB type="gamma" amplitude="1" exponent=".62" offset="0"/></feComponentTransfer>
+    <feComponentTransfer><feFuncR type="table" tableValues="${dark[0]} ${mid[0]} ${light[0]}"/><feFuncG type="table" tableValues="${dark[1]} ${mid[1]} ${light[1]}"/><feFuncB type="table" tableValues="${dark[2]} ${mid[2]} ${light[2]}"/></feComponentTransfer>`;
+  defs.appendChild(f);
+  return id;
+}
 function headliner(list, used){
   const sc = new Map();
   for(const t of list){ const a = aArtist(t); if(!a || a==="Artiste inconnu") continue; sc.set(a, (sc.get(a)||0) + 1 + (t.play_count||0)*3 + (t.favorite?2:0)); }
@@ -1926,7 +1942,8 @@ function searchResults(){
     let h = "";
     if(rec.length) h += `<div class="sec"><h3>Recherches récentes</h3><button data-act="clear-recent">Effacer</button></div>${rec.map(r=>`<button class="recent-q" data-act="re-search" data-arg="${esc(r)}">${ICON.clock}${esc(r)}</button>`).join("")}`;
     if(genres.length) h += `<div class="sec"><h3>Parcourir par genre</h3></div><div class="genres">${(() => { artUsed = new Set(); return ""; })()}${genres.map(g=>{ const a = headliner(tracks.filter(t=>sameGenre(t.genre, g)), artUsed);
-      return `<button class="genre" data-go="genre:${esc(g)}" style="--gc:${genreColor(g)}">${a?`<div class="cv gimg" data-artimg="${esc(a)}" style="${artBg(a)}"></div>`:""}<span>${esc(g)}</span></button>`; }).join("")}</div>`;
+      const col = genreColor(g);
+      return `<button class="genre" data-go="genre:${esc(g)}" style="--gc:${col}">${a?`<div class="cv gimg" data-artimg="${esc(a)}" style="${artBg(a)};filter:url(#${duoFilter(col)})"></div>`:""}<span>${esc(g)}</span></button>`; }).join("")}</div>`;
     if(!h) h = `<div class="empty"><p>Cherche dans ta bibliothèque, y compris dans les paroles.</p></div>`;
     return h;
   }
