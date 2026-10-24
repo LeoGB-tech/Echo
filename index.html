@@ -228,10 +228,10 @@ main#view{max-width:1100px;margin:0 auto;padding:0 16px}
 .search svg{position:absolute;left:14px;top:50%;transform:translateY(-50%);width:18px;height:18px;color:var(--mute)}
 .search input{width:100%;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px 12px 42px;outline:none}
 .search input:focus{border-color:var(--a1)}
-.genres{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:18px}
+.genres{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:18px;width:100%}
 @media (max-width:600px){.genres{grid-template-columns:1fr 1fr;gap:10px}}
 .genre{aspect-ratio:16/9;height:auto;border-radius:10px;padding:12px 14px;text-align:left;font-weight:700;font-size:16px;display:flex;align-items:flex-end;position:relative;overflow:hidden;color:#fff;background:var(--gc,#7b5cf0)!important;isolation:isolate;box-shadow:0 1px 3px rgba(0,0,0,.12)}
-.genre .gimg{position:absolute;inset:0;width:100%;height:100%;border-radius:0;font-size:0;background-size:cover!important;background-position:center 18%!important;z-index:0}
+.genre .gimg{position:absolute;inset:0;width:100%;height:100%;border-radius:0;font-size:0;background-size:cover!important;background-position:center 28%!important;z-index:0}
 .genre::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0) 62%,rgba(0,0,0,.22));z-index:0}
 .genre span{position:relative;z-index:1;text-shadow:0 1px 4px rgba(0,0,0,.25)}
 .genre:hover .gimg{transform:scale(1.04);transition:transform .4s}
@@ -1462,7 +1462,7 @@ function artUrl(name){
   const o = artOv.get(name);
   if(o){ if(o.image_path && urls[o.image_path]) return urls[o.image_path]; if(o.image_url) return o.image_url; }
   // 1) photo Apple Music (les mêmes images que dans l'app Musique), 2) sinon Deezer
-  return LS.get("art3:"+name, null) || LS.get("art2:"+name, null) || null;
+  return LS.get("art4:"+name, null) || LS.get("art2:"+name, null) || null;
 }
 // photos Apple Music, demandées par lots de 25 à la fonction « artimg » (cache serveur 30 jours)
 async function appleArtistPhotos(names){
@@ -1525,7 +1525,7 @@ const artQ = []; let artBusy = 0;
 function loadArtistImages(){
   document.querySelectorAll("[data-artimg]").forEach(el => {
     const n = el.dataset.artimg;
-    if(artOv.get(n)?.image_url || artOv.get(n)?.image_path || LS.get("art3:"+n, null) !== null || n==="Artiste inconnu" || artQ.includes(n)) return; artQ.push(n);
+    if(artOv.get(n)?.image_url || artOv.get(n)?.image_path || LS.get("art4:"+n, null) !== null || n==="Artiste inconnu" || artQ.includes(n)) return; artQ.push(n);
   });
   pumpArt();
 }
@@ -1536,9 +1536,9 @@ function pumpArt(){
     appleArtistPhotos(batch).then(async res => {
       for(const n of batch){
         const u = res[n];
-        if(u){ LS.set("art3:"+n, u); refreshArtImg(n); continue; }
+        if(u){ LS.set("art4:"+n, u); refreshArtImg(n); continue; }
         if(!(n in res)){ continue; } // serveur injoignable : on réessaiera plus tard
-        LS.set("art3:"+n, "");
+        LS.set("art4:"+n, "");
         // pas de photo chez Apple : on garde l'ancienne recherche Deezer
         if(LS.get("art2:"+n, null) === null){ const d = await findArtistPhoto(n).catch(()=>null); LS.set("art2:"+n, d||""); }
         refreshArtImg(n);
@@ -1556,7 +1556,7 @@ async function resetArtistPhoto(name){
   const g = artOv.get(name)?.genre;
   if(g){ await sb.from("artist_images").update({ image_url:null, image_path:null }).eq("name", name); artOv.set(name, { ...artOv.get(name), image_url:null, image_path:null }); }
   else { await sb.from("artist_images").delete().eq("name", name); artOv.delete(name); }
-  LS.set("artOv", [...artOv]); LS.set("art2:"+name, null); LS.set("art3:"+name, null);
+  LS.set("artOv", [...artOv]); LS.set("art2:"+name, null); LS.set("art4:"+name, null);
   try{ localStorage.removeItem("echo.art2:"+name); }catch{}
   refreshArtImg(name); artQ.push(name); pumpArt(); toast("Photo automatique");
 }
@@ -1752,9 +1752,31 @@ const plays = a => a.tracks.reduce((s,t)=>s+(t.play_count||0),0);
 function rankedArtists(){ return [...artists].filter(a=>a.name!=="Artiste inconnu").sort((a,b)=>(plays(b)*3 + b.tracks.length) - (plays(a)*3 + a.tracks.length)); }
 function lastArtist(){ const h = SMART.history.get(); return h.length ? aArtist(h[0]) : null; }
 function genresOf(name){ return new Set((artistOf(name)?.tracks||[]).map(t=>t.genre).filter(Boolean)); }
+// artistes proches : la liste « artistes similaires » de Deezer (même style), croisée avec ta bibliothèque.
+// En attendant (ou si Deezer ne connaît pas l'artiste), on prend ceux dont le genre PRINCIPAL est le même.
 function similarArtists(name){
-  const g = genresOf(name); if(!g.size) return [];
-  return rankedArtists().filter(a => a.name!==name && a.tracks.some(t=>g.has(t.genre)));
+  const rel = LS.get("rel2:"+name, null);
+  if(rel === null) fetchRelated(name);
+  const lib = new Map(rankedArtists().map(a => [norm(a.name), a]));
+  const fromRel = (rel||[]).map(n => lib.get(norm(n))).filter(a => a && a.name !== name);
+  if(fromRel.length >= 3) return [...new Set(fromRel)];
+  const mainG = a => { const c = new Map(); a.tracks.forEach(t => { const g = genreOf(t); if(g){ const k = genreKey(g); c.set(k, (c.get(k)||0)+1); } }); return [...c.entries()].sort((x,y)=>y[1]-x[1])[0]?.[0]; };
+  const me = artistOf(name), g = me && mainG(me); if(!g) return fromRel;
+  return [...new Set([...fromRel, ...rankedArtists().filter(a => a.name !== name && mainG(a) === g)])];
+}
+const relBusy = new Set();
+async function fetchRelated(name){
+  if(relBusy.has(name) || offlineMode) return; relBusy.add(name);
+  try{
+    const prim = primaryArtist(name);
+    const r = await dz(`search/artist?q=${encodeURIComponent(prim)}&limit=10`);
+    const hit = (r?.data||[]).filter(x => norm(x.name) === norm(prim)).sort((a,b) => (b.nb_fan||0) - (a.nb_fan||0))[0];
+    if(!hit){ LS.set("rel2:"+name, []); return; }
+    const rel = await dz(`artist/${hit.id}/related?limit=60`);
+    if(!rel?.data) return;
+    LS.set("rel2:"+name, rel.data.map(x => x.name));
+    const cur = curR()?.r || ""; if(cur === "mix:like:"+name || cur === "home") render();
+  }finally{ relBusy.delete(name); }
 }
 function getMix(id){
   const [k, ...rest] = id.split(":"); const arg = rest.join(":");
@@ -1770,7 +1792,8 @@ function getMix(id){
     return { id, kicker:"Indispensables", name:arg, title:`Indispensables : ${arg}`, desc: `Les plus grands titres de ${arg}, dans l'ordre de popularité`, tracks:l, artist:arg, ordered:true, pending:!ranked }; }
   if(k==="disc"){ const a = artistOf(arg); if(!a) return null; const l = seeded(uniqT(a.tracks).sort((x,y)=>(x.play_count||0)-(y.play_count||0)).slice(0,40), daySeed());
     return { id, kicker:"Découvrir", name:arg, title:`Découvrir ${arg}`, desc:`Plonge dans les morceaux de ${arg} que tu connais le moins`, tracks:l, artist:arg }; }
-  if(k==="like"){ const sim = similarArtists(arg).slice(0,12); const l = seeded(sim.flatMap(a=>uniqT(a.tracks).slice(0,6)), daySeed()+arg).slice(0,50);
+  if(k==="like"){ const sim = similarArtists(arg).slice(0,15); const top = a => uniqT(a.tracks).sort((x,y)=>(y.play_count||0)-(x.play_count||0)||(y.favorite?1:0)-(x.favorite?1:0)).slice(0,5);
+    const l = seeded([...uniqT(artistOf(arg)?.tracks||[]).slice(0,4), ...sim.flatMap(top)], daySeed()+arg).slice(0,50);
     return { id, kicker:"Dans le même esprit", name:arg, title:`Dans l'esprit de ${arg}`, desc:`Des artistes de ta bibliothèque proches de ${arg}`, tracks:l, artist:arg }; }
   if(k==="decade"){ const d = +arg; const l = tracks.filter(t=>t.year>=d && t.year<d+10);
     return { id, kicker:"Voyage dans le temps", name:`Années ${String(d).slice(2)}`, title:`Les années ${String(d).slice(2)}`, desc:`Ta musique sortie entre ${d} et ${d+9}`, tracks:l, decade:d, grad:["linear-gradient(135deg,#f72585,#7209b7)","linear-gradient(135deg,#4cc9f0,#4361ee)","linear-gradient(135deg,#f9c74f,#f3722c)","linear-gradient(135deg,#43aa8b,#277da1)","linear-gradient(135deg,#ff8fab,#fb6f92)"][(d/10)%5] }; }
@@ -1796,7 +1819,7 @@ function genreTileArtists(genres){
     const s = score.get(a+"|"+k) || 0; score.set(a+"|"+k, s + 1 + (t.play_count||0)*3 + (t.favorite?2:0)); }
   const primary = a => [...(main.get(a)||new Map()).entries()].sort((x,y)=>y[1]-x[1])[0]?.[0];
   // sur les tuiles : uniquement des photos Apple Music (ou une photo choisie à la main), jamais de pochette ni de logo Deezer
-  const noPhoto = a => !tileImg(a) && LS.get("art3:"+a, null) === "";
+  const noPhoto = a => !tileImg(a) && LS.get("art4:"+a, null) !== null; // déjà vérifié chez Apple et pas de vraie photo
   // jamais deux fois le même artiste… ni la même photo (un duo « A & B » a souvent la photo de A)
   const used = new Set(), usedImg = new Set(), out = new Map();
   for(const g of genres){
@@ -1808,7 +1831,10 @@ function genreTileArtists(genres){
   }
   return out;
 }
-const tileImg = a => { const o = artOv.get(a); if(o?.image_path && urls[o.image_path]) return urls[o.image_path]; return o?.image_url || LS.get("art3:"+a, null) || null; };
+// tuiles de genre : seulement les vraies photos d'artiste d'Apple Music (« AMCArtistImages … ami-identity » ou photos éditoriales),
+// pas les logos (Red Hot Chili Peppers) ni les visuels d'album que certains artistes mettent comme photo
+const tileOK = u => /\/AMCArtistImages\d+\/.*ami-identity|\/Features\d+\//.test(u||"");
+const tileImg = a => { const o = artOv.get(a); if(o?.image_path && urls[o.image_path]) return urls[o.image_path]; if(o?.image_url) return o.image_url; const u = LS.get("art4:"+a, null); return u && tileOK(u) ? u : null; };
 const sameGenre = (a, b) => !!a && !!b && genreKey(a) === genreKey(b);
 const genreColor = g => { const k = genreKey(g); if(GENRE_COLOR[k]) return GENRE_COLOR[k]; const pal = Object.values(GENRE_COLOR); let h = 0; for(const c of k) h = (h*31 + c.charCodeAt(0)) >>> 0; return pal[h % pal.length]; };
 // artiste « tête d'affiche » d'une liste ; `used` évite de remettre la même photo sur deux cartes voisines
@@ -3063,18 +3089,18 @@ function hydrateLogos(){
   });
 }
 async function loadFeatured(){
-  const c = LS.get("radioFeat", null);
+  const c = LS.get("radioFeat2", null);
   if(c && Date.now()-c.at < 7*864e5 && c.list.length) return c.list;
   const out = [];
   await Promise.all(FEATURED.map(async (name, i) => {
     const r = await rb(`stations/search?name=${encodeURIComponent(name)}&countrycode=FR&hidebroken=true&order=clickcount&reverse=true&limit=8`);
     const k = norm(name);
     const score = st => (norm(st.name)===k ? 3 : norm(st.name).startsWith(k) ? 2 : 0);
-    const best = (r||[]).filter(playable).sort((a,b)=> score(b)-score(a) || b.clickcount-a.clickcount)[0];
+    const best = (r||[]).filter(playable).sort((a,b)=> score(b)-score(a) || hasAds(a.url_resolved) - hasAds(b.url_resolved) || b.clickcount-a.clickcount)[0];
     if(best) out[i] = { ...toStation(best), name };
   }));
   const list = out.filter(Boolean);
-  if(list.length) LS.set("radioFeat", { at:Date.now(), list });
+  if(list.length) LS.set("radioFeat2", { at:Date.now(), list });
   return list;
 }
 function rLogo(st, cls="rl", extra=""){
@@ -3121,14 +3147,33 @@ document.addEventListener("click", e => {
   e.stopPropagation();
   const list = radioCache[el.dataset.rlist] || []; const st = list.find(x=>x.uuid===el.dataset.radio); if(st) playRadio(st, list);
 }, true);
+/* ---- pubs au lancement : beaucoup de radios privées (NRJ, Chérie, Nostalgie, Rire & Chansons…) passent leur flux par
+   un serveur publicitaire (« AdsWizz ») qui insère une pub à CHAQUE nouvelle connexion → quand on change de radio et qu'on
+   revient, la pub recommence. On prend l'adresse directe du flux, sans ce serveur, quand elle existe. */
+const hasAds = u => /adwz|adswizz|aw_0_|\/ads?\/|preroll|deliveryengine/i.test(String(u||"")) ? 1 : 0;
+function adFree(u){
+  try{
+    const x = new URL(u);
+    x.pathname = x.pathname.replace(/\/adwz\d*\//i, "/");                       // scdn.nrjaudio.fm/adwz2/fr/30001/… → /fr/30001/…
+    [...x.searchParams.keys()].forEach(k => { if(/^(aw_|awparams|listenerid|origine|cmp|gdpr|us_privacy)/i.test(k)) x.searchParams.delete(k); });
+    return x.toString();
+  }catch{ return u; }
+}
 function playRadio(st, list){
   savePlay(); radioMode = st; radioList = list || [st];
   // la radio remplace la musique : la file d'attente des morceaux est vidée (comme sur Apple Music)
   queue = []; qi = 0; baseList = []; userQ.clear(); saveState(); renderQueue();
   // adresse unique à chaque lancement : le navigateur ne peut pas resservir un vieux bout de flux (pub qui recommence…) → vrai direct
-  const live = st.url + (st.url.includes("?") ? "&" : "?") + "echo=" + Date.now();
+  const direct = adFree(st.url);
+  const live = direct + (direct.includes("?") ? "&" : "?") + "echo=" + Date.now();
   audio.pause(); audio.removeAttribute("src"); audio.load();
-  audio.preload = "auto"; audio.src = live; audio.play().catch(()=>toast("Radio indisponible pour le moment"));
+  audio.preload = "auto"; audio.src = live;
+  audio.play().catch(() => {
+    // l'adresse directe ne marche pas pour cette radio : on reprend l'adresse d'origine
+    if(direct !== st.url && radioMode?.uuid === st.uuid){ audio.src = st.url + (st.url.includes("?") ? "&" : "?") + "echo=" + Date.now(); audio.play().catch(() => toast("Radio indisponible pour le moment")); }
+    else toast("Radio indisponible pour le moment");
+  });
+  if(direct !== st.url){ const onErr = () => { if(radioMode?.uuid === st.uuid && audio.src.includes(direct.split("?")[0])){ audio.src = st.url; audio.play().catch(()=>{}); } }; audio.addEventListener("error", onErr, { once:true }); }
   radioMeta = null; startRadioMeta(st); setTimeout(() => connTrack(true), 0);
   startPlay({ radio:st.name, source:"radio" });
   $("#full").classList.add("is-radio"); $("#mini").classList.remove("hidden");
@@ -4746,7 +4791,7 @@ async function uploadOne(f, prog){
 if("serviceWorker" in navigator && (location.protocol==="https:" || location.hostname==="localhost")) navigator.serviceWorker.register("sw.js").catch(()=>{});
 
 /* ============ mises à jour : sur iPhone l'app reste ouverte des jours, on vérifie à chaque retour ============ */
-const ECHO_BUILD = "2026-10-24.10";
+const ECHO_BUILD = "2026-10-24.12";
 let updPending = false, lastUpdCheck = 0;
 async function checkUpdate(){
   if(!navigator.onLine || Date.now() - lastUpdCheck < 60e3) return; lastUpdCheck = Date.now();
