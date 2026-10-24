@@ -618,6 +618,9 @@ input[type=range]{height:4px}
 .shareV #sPlay svg{width:30px;height:30px}
 .shareV .sbar input{width:100%;accent-color:#fff}.shareV .sclk{display:flex;justify-content:space-between;font-size:12px;opacity:.65;margin-top:4px}
 .shareV small{display:block;margin-top:26px;opacity:.55;font-size:12px}
+#routeBtn.remote{color:var(--a1,#fa2d48)!important;opacity:1!important}
+.offBanner{display:flex;gap:14px;align-items:flex-start;background:var(--card);border-radius:14px;padding:14px 16px;margin:6px 0 8px}
+.offBanner svg{width:26px;height:26px;flex:none;color:var(--a1);margin-top:2px}.offBanner b{display:block;font-size:16px}.offBanner span{color:var(--dim);font-size:14px}
 .tapPlay{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(150px + env(safe-area-inset-bottom));z-index:400;display:flex;align-items:center;gap:12px;background:var(--a1,#fa2d48);color:#fff;border:0;border-radius:18px;padding:14px 20px 14px 16px;box-shadow:0 12px 40px rgba(0,0,0,.35);max-width:calc(100vw - 32px);text-align:left;animation:sin .35s ease-out}
 .tapPlay svg{width:30px;height:30px;flex:none}.tapPlay b{display:block;font-size:16px}.tapPlay small{display:block;opacity:.85;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:62vw}
 .connS .it svg{flex:none}.connS .it small.sub2{display:block;color:var(--dim);font-size:13px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1003,12 +1006,20 @@ function shareView(){
   a.onerror = () => { $("#sDur").textContent = "Lecture impossible"; };
   if("mediaSession" in navigator) navigator.mediaSession.metadata = new MediaMetadata({ title:d.t, artist:d.a, album:d.al, artwork: d.c ? [{ src:d.c, sizes:"512x512" }] : [] });
 }
+const within = (p, ms) => Promise.race([Promise.resolve(p), new Promise((_, rej) => setTimeout(() => rej(new Error("network timeout")), ms))]);
+function localSession(){ // session enregistrée sur l'appareil (pour démarrer sans réseau)
+  try{ for(let i=0;i<localStorage.length;i++){ const k = localStorage.key(i); if(/^sb-.*-auth-token$/.test(k)){ const v = JSON.parse(localStorage.getItem(k)); const s = v?.currentSession || v; if(s?.user) return s; } } }catch{}
+  return null;
+}
 async function boot(){
   if(location.hash.startsWith("#s=")) return shareView();
   if(!cfg){ show("setup"); return; }
   try{ sb = supabase.createClient(cfg.url, cfg.key, { auth:{ persistSession:true, autoRefreshToken:true } }); }
   catch(e){ LS.set("cfg", null); cfg=null; show("setup"); $("#cfgErr").textContent="Configuration invalide."; return; }
-  const { data:{ session } } = await sb.auth.getSession();
+  // hors ligne, Supabase peut rester bloqué à rafraîchir la session : on n'attend pas plus de 4 s
+  let session = null;
+  try{ session = (await within(sb.auth.getSession(), navigator.onLine ? 6000 : 2500)).data?.session || null; }catch{}
+  if(!session) session = localSession();
   if(session){ user = session.user; enter(); } else show("login");
   sb.auth.onAuthStateChange(ev => { if(ev==="SIGNED_OUT"){ user=null; show("login"); } });
 }
@@ -1033,7 +1044,7 @@ const PROF_EMOJIS = ["🎧","🎸","🎤","🎹","🥁","🎷","🦊","🐼","�
 async function chooseProfile(){
   const saved = LS.get("profile", null);
   let list = null;
-  try{ const r = await sb.from("profiles").select("*").order("created_at"); if(!r.error) list = r.data; }catch{}
+  if(navigator.onLine){ try{ const r = await within(sb.from("profiles").select("*").order("created_at"), 6000); if(!r.error) list = r.data; }catch{} }
   if(!list){ list = LS.get("profiles", []); if(saved && list.find(x=>x.id===saved.id)) { PROFILE = saved; return true; } if(saved){ PROFILE = saved; return true; } }
   profilesList = list; LS.set("profiles", list);
   if(saved && list.find(x=>x.id===saved.id)){ PROFILE = list.find(x=>x.id===saved.id); LS.set("profile", PROFILE); return true; }
@@ -1119,12 +1130,13 @@ async function fetchAll(table, cols, order, asc, filt){
 }
 async function loadAll(){
   try{
-    const [t, p, pi, ts] = await Promise.all([
+    if(!navigator.onLine) throw new Error("offline");
+    const [t, p, pi, ts] = await within(Promise.all([
       fetchAll("tracks", "*", "created_at", false),
       fetchAll("playlists", "*", "updated_at", false, q => q.eq("profile_id", PROFILE.id)),
       fetchAll("playlist_tracks", "*", "position", true),
       fetchAll("track_stats", "track_id,favorite,play_count,last_played", "track_id", true, q => q.eq("profile_id", PROFILE.id)),
-    ]);
+    ]), 15000);
     if(t.error && /fetch|network/i.test(t.error.message)) throw t.error;
     if(t.error){ toast("Erreur : "+t.error.message); return false; }
     if(p.error || pi.error || (t.data[0] && !("favorite" in t.data[0]))) return "migrate";
@@ -1141,12 +1153,15 @@ async function loadAll(){
     const ai = await sb.from("artist_images").select("*");
     if(!ai.error){ artOv = new Map(ai.data.map(x=>[x.name, x])); LS.set("artOv", [...artOv]); }
     offlineMode = false;
+    { const meta = {}; const keep = ["id","title","artist","album","album_artist","duration","path","cover_path","cover_url","genre","year","track_no","disc_no","parts","size","created_at","favorite","play_count"];
+      tracks.forEach(t => { if(offline.has(t.id)){ const o = {}; keep.forEach(k => o[k] = t[k]); meta[t.id] = o; } }); LS.set("offMeta", meta); }
     await signAll(true);
     saveCache(); flushOutbox();
   }catch(e){
-    const c = await readCache() || LS.get("cache", null);
-    if(!c){ toast("Hors ligne et aucune donnée enregistrée"); return false; }
+    // sans réseau : bibliothèque enregistrée, sinon au moins les titres téléchargés
+    const c = await readCache() || LS.get("cache", null) || { tracks: Object.values(LS.get("offMeta", {})) };
     tracks = c.tracks||[]; playlists = c.playlists||[]; plItems = c.plItems||[];
+    { const meta = LS.get("offMeta", {}), have = new Set(tracks.map(t=>t.id)); Object.values(meta).forEach(t => { if(!have.has(t.id)) tracks.push(t); }); }
     if(c.notifs) notifs = c.notifs; if(c.radioFavs) radioFavs = c.radioFavs; if(c.artOv) artOv = new Map(c.artOv);
     if(c.urls) Object.assign(urls, c.urls);
     offlineMode = true;
@@ -1576,7 +1591,7 @@ function render(){
   $("#tbTitle").textContent = routeTitle(r);
   let act = "";
   let h = "";
-  if(k==="home"){ const un = notifs.filter(n=>!n.read).length; act = `<button class="ib" data-act="settings" title="${esc(PROFILE?.name||"")}" style="background:${PROFILE?.color};color:#fff;font-size:18px">${esc(PROFILE?.emoji||"")}</button><button class="ib bell" data-act="notifs" title="Notifications">${ICON.bell}${un?`<span class="dot">${un>9?"9+":un}</span>`:""}</button>${IS_DESKTOP?`<button class="ib accent" data-act="upload" title="Ajouter">${ICON.plus}</button>`:""}`; h = vHome(); }
+  if(k==="home"){ const un = notifs.filter(n=>!n.read).length; act = `<button class="ib" data-act="settings" title="${esc(PROFILE?.name||"")}" style="background:${PROFILE?.color};color:#fff;font-size:18px">${esc(PROFILE?.emoji||"")}</button><button class="ib bell" data-act="notifs" title="Notifications">${ICON.bell}${un?`<span class="dot">${un>9?"9+":un}</span>`:""}</button>${IS_DESKTOP?`<button class="ib accent" data-act="upload" title="Ajouter">${ICON.plus}</button>`:""}`; h = offlineMode ? vOffline() : vHome(); }
   else if(k==="library"){ act = IS_DESKTOP ? `<button class="ib accent" data-act="upload" title="Ajouter">${ICON.plus}</button>` : ""; h = vLibrary(); }
   else if(k==="search") h = vSearch();
   else if(k==="radio") h = vRadio();
@@ -1729,6 +1744,19 @@ function vMix(id){
 }
 const shelf = (title, inner, more) => inner ? `<div class="sec"><h3>${title}</h3>${more?`<button data-go="${more}">Tout voir</button>`:""}</div><div class="strip">${inner}</div>` : "";
 
+/* ---- écran hors ligne : les titres téléchargés d'abord ---- */
+function vOffline(){
+  const l = tracks.filter(t => offline.has(t.id)).sort((a,b) => (b.favorite?1:0)-(a.favorite?1:0) || (b.play_count||0)-(a.play_count||0) || cmp(a.title||"", b.title||""));
+  const k = reg("offhome", l);
+  const hist = SMART.history.get().filter(t => offline.has(t.id)).slice(0, 12), kh = reg("offhist", hist);
+  return `<h1 class="lt">Hors ligne</h1>
+    <div class="offBanner"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 8.5a15 15 0 0 1 5-3M22 8.5a15 15 0 0 0-11-4M5 12.5a10 10 0 0 1 4-2.3M19 12.5a10 10 0 0 0-3.2-2M8.5 16a5 5 0 0 1 7 0M12 20h.01M3 3l18 18"/></svg><div><b>Pas de connexion</b><span>Tes titres téléchargés restent disponibles. Écho se reconnecte tout seul dès que le réseau revient.</span></div></div>
+    ${hist.length ? shelf("Écoutés récemment", hist.map(t=>`<button class="tile" data-tile="${t.id}" data-list="${kh}">${cv(t)}<div class="t">${esc(t.title)}</div><div class="a">${esc(t.artist||"")}</div></button>`).join("")) : ""}
+    <div class="sec"><h3>Titres téléchargés</h3></div>
+    ${l.length ? `<p class="sub" style="margin:-6px 0 10px">${nMorceaux(l.length)} · ${fmtLong(l.reduce((s,t)=>s+(t.duration||0),0))}</p>${playbar(k)}<div class="list">${l.map(t=>tRow(t,k)).join("")}</div>`
+      : `<div class="empty"><div class="big">${ICON.down}</div><h3>Aucun titre téléchargé</h3><p>Quand tu as du réseau, choisis « Télécharger » dans le menu ⋯ d'un morceau, d'un album ou d'une playlist, ou active « Garder toute la musique sur cet appareil » dans les réglages.</p></div>`}`;
+}
+addEventListener("online", async () => { if(offlineMode && user && PROFILE){ const ok = await loadAll(); if(ok === true){ toast("De retour en ligne"); render(); } } });
 function vHome(){
   if(!tracks.length) return `<h1 class="lt">Écouter</h1><p class="sub">${new Date().toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long"})}</p>${emptyLib()}`;
   const hr = new Date().getHours();
@@ -2363,6 +2391,15 @@ async function downloadOne(t, onProg){
   await c.put(offKey(t.id), new Response(new Blob(parts, { type: MIME[t.path.split(".").pop()]||"audio/mpeg" })));
   if(coverOf(t)) fetch(coverOf(t), { mode:"no-cors" }).catch(()=>{});
   offline.add(t.id); LS.set("off", [...offline]);
+  saveOffMeta(t);
+}
+// infos des titres téléchargés, gardées à part : l'écran hors ligne marche même sans bibliothèque enregistrée
+function saveOffMeta(t){
+  const meta = LS.get("offMeta", {});
+  const { id, title, artist, album, album_artist, duration, path, cover_path, cover_url, genre, year, track_no, disc_no, parts, size, created_at, favorite, play_count } = t;
+  meta[id] = { id, title, artist, album, album_artist, duration, path, cover_path, cover_url, genre, year, track_no, disc_no, parts, size, created_at, favorite, play_count };
+  for(const k of Object.keys(meta)) if(!offline.has(k)) delete meta[k];
+  LS.set("offMeta", meta);
 }
 let syncState = { running:false, done:0, total:0, lyr:0, lyrTotal:0, msg:"" };
 async function startBackgroundSync(){
@@ -3813,34 +3850,52 @@ async function settingsSheet(){
 /* ============ Écho Connect : contrôler la lecture d'un autre appareil (PC ↔ téléphone) ============ */
 let routeAvail = false, conn = null, peers = {}, connSel = null, connT = 0, connTick = 0;
 const DEV_ID = LS.get("devId", null) || (() => { const v = crypto.randomUUID(); LS.set("devId", v); return v; })();
+// chaque fenêtre/onglet a son propre identifiant : deux fenêtres d'Écho sur le même PC ne se masquent plus
+const TAB_ID = (() => { try{ let v = sessionStorage.getItem("echoTab"); if(!v){ v = crypto.randomUUID(); sessionStorage.setItem("echoTab", v); } return v; }catch{ return crypto.randomUUID(); } })();
 const UA = navigator.userAgent;
 const devName = () => LS.get("devName", null) || (/iPad/.test(UA) || (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1) ? "iPad" : /iPhone/.test(UA) ? "iPhone" : /Android/.test(UA) ? "Téléphone Android" : /Mac/.test(UA) ? "Mac" : "Ordinateur");
 const devIcon = n => /iPhone|Android|Téléphone/i.test(n) ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>` : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>`;
 function connStart(){
   if(conn || !sb?.channel || !user || offlineMode) return;
   try{
-    conn = sb.channel("connect-"+user.id, { config:{ presence:{ key:DEV_ID }, broadcast:{ self:false } } });
+    conn = sb.channel("connect-"+user.id, { config:{ presence:{ key:TAB_ID }, broadcast:{ self:false } } });
     conn.on("presence", { event:"sync" }, () => {
-      const st = conn.presenceState(); peers = {};
-      for(const [k, arr] of Object.entries(st)) if(k !== DEV_ID && arr[0]) peers[k] = arr[arr.length-1];
+      const st = conn.presenceState(); const next = {};
+      for(const [k, arr] of Object.entries(st)) if(k !== TAB_ID && arr[0]){ const v = arr[arr.length-1]; next[k] = peers[k] && (peers[k].at||0) > (v.at||0) ? peers[k] : v; }
+      peers = next;
       if(connSel && !peers[connSel]) connSel = null;
-      if(document.querySelector(".sheet .connS")) connectSheet(true);
+      connRefresh();
     });
-    conn.on("broadcast", { event:"cmd" }, ({ payload }) => { if(payload?.to === DEV_ID) onConnCmd(payload); });
-    conn.subscribe(st => { if(st === "SUBSCRIBED") connTrack(); });
+    // état en direct (morceau, lecture/pause, position) : envoyé à chaque changement, sans attendre la présence
+    conn.on("broadcast", { event:"state" }, ({ payload }) => { if(!payload?.from || payload.from === TAB_ID) return; peers[payload.from] = { ...(peers[payload.from]||{}), ...payload }; connRefresh(); });
+    conn.on("broadcast", { event:"cmd" }, ({ payload }) => { if(payload?.to === TAB_ID) onConnCmd(payload); });
+    conn.on("broadcast", { event:"hello" }, ({ payload }) => { if(payload?.from !== TAB_ID) connTrack(true); });
+    conn.subscribe(st => { if(st === "SUBSCRIBED"){ connTrack(true); conn.send({ type:"broadcast", event:"hello", payload:{ from:TAB_ID } }); } });
   }catch(e){ conn = null; }
 }
 function connState(){
   const t = queue[qi];
-  return { name:devName(), who:PROFILE?.name||"", emoji:PROFILE?.emoji||"", color:PROFILE?.color||"",
+  return { from:TAB_ID, dev:DEV_ID, name:devName(), who:PROFILE?.name||"", emoji:PROFILE?.emoji||"", color:PROFILE?.color||"",
     t: radioMode ? { title:radioMode.name, artist:"Radio" } : t ? { id:t.id, title:t.title, artist:t.artist||"", dur:audio.duration||t.duration||0 } : null,
     playing: !audio.paused, pos: audio.currentTime||0, at: Date.now() };
 }
-function connTrack(){ if(!conn) return; clearTimeout(connT); connT = setTimeout(() => { try{ conn.track(connState()); }catch{} }, 400); }
-["play","playing","pause","seeked","loadedmetadata"].forEach(ev => audio.addEventListener(ev, connTrack));
-setInterval(() => { if(conn && !audio.paused) connTrack(); }, 15000); // recale la position vue par les autres appareils
-document.addEventListener("visibilitychange", () => { if(!document.hidden) connTrack(); });
-const connSend = (to, op, extra = {}) => conn?.send({ type:"broadcast", event:"cmd", payload:{ to, from:DEV_ID, op, ...extra } });
+function connTrack(now){
+  if(!conn) return; clearTimeout(connT);
+  connT = setTimeout(() => { const s = connState(); try{ conn.send({ type:"broadcast", event:"state", payload:s }); }catch{} try{ conn.track(s); }catch{} }, now === true ? 0 : 150);
+}
+["play","playing","pause","seeked","loadedmetadata","emptied"].forEach(ev => audio.addEventListener(ev, connTrack));
+setInterval(() => { if(conn && !audio.paused) connTrack(); }, 10000); // recale la position vue par les autres appareils
+document.addEventListener("visibilitychange", () => { if(!document.hidden){ connTrack(true); conn?.send({ type:"broadcast", event:"hello", payload:{ from:TAB_ID } }); } });
+let connRT = 0;
+function connRefresh(){ clearTimeout(connRT); connRT = setTimeout(() => { if(document.querySelector(".sheet .connS")) connectSheet(true); updConnBadge(); }, 60); }
+// petit rappel dans le lecteur quand la musique joue sur un autre appareil
+function updConnBadge(){
+  const b = $("#routeBtn"); if(!b) return;
+  const other = Object.values(peers).find(p => p.playing && p.t);
+  b.classList.toggle("remote", !!other && audio.paused);
+  b.title = other && audio.paused ? `En lecture sur ${other.name}` : "Appareils";
+}
+const connSend = (to, op, extra = {}) => conn?.send({ type:"broadcast", event:"cmd", payload:{ to, from:TAB_ID, op, ...extra } });
 function onConnCmd(m){
   if(m.op === "toggle") return toggle();
   if(m.op === "next") return next(true);
@@ -3880,12 +3935,14 @@ function tapToPlay(from){
 }
 function connectSheet(refresh){
   if(!refresh) connStart();
-  const list = Object.entries(peers).sort((a,b) => (b[1].playing?1:0)-(a[1].playing?1:0));
+  const list = Object.entries(peers).sort((a,b) => (b[1].playing?1:0)-(a[1].playing?1:0) || (b[1].t?1:0)-(a[1].t?1:0));
+  const label = v => esc(v.name) + (v.dev === DEV_ID ? ` <small style="color:var(--dim)">(autre fenêtre)</small>` : "");
+  const livePos = v => v?.t?.dur ? ` · ${fmt(Math.min(v.t.dur, (v.pos||0) + (v.playing ? (Date.now()-(v.at||Date.now()))/1000 : 0)))}` : "";
   const p = connSel && peers[connSel];
   const pos = p ? Math.min(p.t?.dur||0, (p.pos||0) + (p.playing ? (Date.now()-p.at)/1000 : 0)) : 0;
   const html = `<div class="connS"><h3>Écho Connect</h3>
     ${p ? `<div class="connNow">
-        <p class="note" style="padding:0 0 6px">${devIcon(p.name)} ${esc(p.name)}${p.who?` · ${esc(p.emoji)} ${esc(p.who)}`:""}</p>
+        <p class="note" style="padding:0 0 6px">${devIcon(p.name)} ${label(p)}${p.who?` · ${esc(p.emoji)} ${esc(p.who)}`:""}</p>
         <b>${esc(p.t?.title || "Rien en lecture")}</b><small>${esc(p.t?.artist||"")}${p.t?.dur?` · ${fmt(pos)} / ${fmt(p.t.dur)}`:""}</small>
         <div class="connCtl"><button data-s="c-prev">${ICON.prev}</button><button data-s="c-toggle" class="pp">${p.playing?ICON.pause:ICON.play}</button><button data-s="c-next">${ICON.next}</button></div>
       </div>
@@ -3893,7 +3950,7 @@ function connectSheet(refresh){
       ${queue[qi] ? it("c-push","upload",`Envoyer ma lecture vers ${esc(p.name)}`) : ""}
       ${it("c-back","chevron","Tous les appareils")}`
     : `<button class="it on" data-s="c-self">${devIcon(devName())}<span>${esc(devName())} <small style="color:var(--dim)">· cet appareil</small></span><span class="r">${!audio.paused?"En lecture":""}</span></button>
-      ${list.map(([k, v]) => `<button class="it" data-s="c-sel" data-v="${k}">${devIcon(v.name)}<span>${esc(v.name)}${v.who?` <small style="color:var(--dim)">· ${esc(v.emoji)} ${esc(v.who)}</small>`:""}<small class="sub2">${v.t ? `${v.playing?"♪ ":"⏸ "}${esc(v.t.title)}${v.t.artist?" — "+esc(v.t.artist):""}` : "Rien en lecture"}</small></span></button>`).join("")}
+      ${list.map(([k, v]) => `<button class="it" data-s="c-sel" data-v="${k}">${devIcon(v.name)}<span>${label(v)}${v.who?` <small style="color:var(--dim)">· ${esc(v.emoji)} ${esc(v.who)}</small>`:""}<small class="sub2">${v.t ? `${v.playing?"♪ ":"⏸ "}${esc(v.t.title)}${v.t.artist?" — "+esc(v.t.artist):""}${livePos(v)}` : "Rien en lecture"}</small></span></button>`).join("")}
       ${!list.length ? `<p class="note">Ouvre Écho sur ton autre appareil (même compte) : il apparaîtra ici. Tu pourras le télécommander ou y transférer ta musique.</p>` : ""}
       ${routeAvail ? `<div class="sep"></div>${it("c-airplay","airplay","AirPlay / Bluetooth…")}` : ""}
       ${it("c-name","edit","Nom de cet appareil","","",esc(devName()))}`}</div>`;
@@ -3917,7 +3974,7 @@ function connectSheet(refresh){
   sheet(html, act);
   // le temps de l'autre appareil avance en direct tant que la fenêtre est ouverte
   clearInterval(connTick);
-  connTick = setInterval(() => { if(!document.querySelector(".sheet .connS")) return clearInterval(connTick); if(connSel && peers[connSel]?.playing) connectSheet(true); }, 1000);
+  connTick = setInterval(() => { if(!document.querySelector(".sheet .connS")) return clearInterval(connTick); if(Object.values(peers).some(v => v.playing)) connectSheet(true); }, 1000);
 }
 
 /* ============ stockage Oracle : réglage + transfert des morceaux déjà envoyés ============ */
@@ -4338,6 +4395,22 @@ async function uploadOne(f, prog){
 
 /* ============ service worker (app hors ligne) ============ */
 if("serviceWorker" in navigator && (location.protocol==="https:" || location.hostname==="localhost")) navigator.serviceWorker.register("sw.js").catch(()=>{});
+
+/* ============ mises à jour : sur iPhone l'app reste ouverte des jours, on vérifie à chaque retour ============ */
+const ECHO_BUILD = "2026-10-24.1";
+let updPending = false, lastUpdCheck = 0;
+async function checkUpdate(){
+  if(!navigator.onLine || Date.now() - lastUpdCheck < 60e3) return; lastUpdCheck = Date.now();
+  try{
+    navigator.serviceWorker?.getRegistration().then(r => r?.update()).catch(()=>{});
+    const txt = await (await fetch(location.pathname + "?v=" + Date.now(), { cache:"no-store" })).text();
+    const m = /const ECHO_BUILD = "([^"]+)"/.exec(txt);
+    if(m && m[1] !== ECHO_BUILD){ updPending = true; if(audio.paused) location.reload(); else toast("Mise à jour d'Écho prête : elle s'installera à la pause"); }
+  }catch{}
+}
+document.addEventListener("visibilitychange", () => { if(!document.hidden) checkUpdate(); });
+audio.addEventListener("pause", () => { if(updPending){ saveState(); setTimeout(() => location.reload(), 300); } });
+setTimeout(checkUpdate, 20000);
 
 boot();
 </script>
