@@ -2282,8 +2282,16 @@ function action(a, arg, el){
   switch(a){
     case "upload":
       if(!IS_DESKTOP) return toast("L'ajout de musique se fait depuis ton PC");
-      return sheet(`<h3>Ajouter de la musique</h3>${it("dir","album","Choisir des dossiers","","","plusieurs, sous-dossiers inclus")}${it("files","song","Choisir des fichiers")}<p style="color:var(--mute);font-size:13px;padding:8px 10px">« Choisir des dossiers » : prends ton dossier principal (ex. Musique), puis coche ses sous-dossiers avec Ctrl / Maj. Pour les fichiers, Ctrl / Maj marchent directement dans la fenêtre de Windows. Tu peux aussi glisser‑déposer plusieurs dossiers sur la page. Les morceaux déjà présents sont ignorés.</p>`,
-        s => { if(s==="files") $("#file").click(); if(s==="dir"){ folderSheet(); $("#folder").click(); return true; } });
+      return sheet(`<h3>Ajouter de la musique</h3>${it("dir","album","Choisir des dossiers","","","plusieurs, sous-dossiers inclus")}${it("files","song","Choisir des fichiers")}${it("clips","down","Récupérer les versions clip","","", clipRun ? `analyse : ${clipRun.done} / ${clipRun.total}` : clipList().length ? `${nMorceaux(clipList().length)} → dossier sur le PC` : "analyse ta bibliothèque")}<p style="color:var(--mute);font-size:13px;padding:8px 10px">« Choisir des dossiers » : prends ton dossier principal (ex. Musique), puis coche ses sous-dossiers avec Ctrl / Maj. Pour les fichiers, Ctrl / Maj marchent directement dans la fenêtre de Windows. Tu peux aussi glisser‑déposer plusieurs dossiers sur la page. Les morceaux déjà présents sont ignorés.</p>`,
+        s => { if(s==="files") $("#file").click(); if(s==="dir"){ folderSheet(); $("#folder").click(); return true; }
+          if(s==="clips"){
+            if(clipRun){ toast(`Analyse en cours : ${clipRun.done} / ${clipRun.total}`); return; }
+            const done = tracks.filter(t => t.id in clipScan || t.tag_status === "auto" || t.tag_status === "manual").length;
+            if(clipList().length && done >= tracks.length) return clipExport();
+            if(clipList().length) return clipExport().then(() => clipScanRun()); // dossier avec ce qui est déjà repéré, puis on finit l'analyse
+            clipScanRun().then(() => { if(clipList().length) toast("Analyse terminée — retouche « Récupérer les versions clip » pour créer le dossier"); });
+            toast("Analyse des versions clip en cours… (tu peux continuer à utiliser Écho)");
+          } });
     case "settings": return settingsSheet();
     case "notifs": return notifSheet();
     case "am": return amSheet();
@@ -5066,7 +5074,7 @@ async function uploadOne(f, prog){
 if("serviceWorker" in navigator && (location.protocol==="https:" || location.hostname==="localhost")) navigator.serviceWorker.register("sw.js").catch(()=>{});
 
 /* ============ mises à jour : sur iPhone l'app reste ouverte des jours, on vérifie à chaque retour ============ */
-const ECHO_BUILD = "2026-10-24.23";
+const ECHO_BUILD = "2026-10-24.24";
 let updPending = false, lastUpdCheck = 0;
 async function checkUpdate(){
   if(!navigator.onLine || Date.now() - lastUpdCheck < 60e3) return; lastUpdCheck = Date.now();
