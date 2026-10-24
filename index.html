@@ -271,9 +271,11 @@ main#view{max-width:1100px;margin:0 auto;padding:0 16px}
   padding:calc(10px + var(--safe-t)) 24px calc(18px + var(--safe-b));transform:translateY(100%);transition:transform .45s cubic-bezier(.2,.8,.2,1),visibility 0s .45s;overflow:hidden;visibility:hidden}
 .full.open{transform:none;visibility:visible;transition-delay:0s}
 /* comme Apple Music : le lecteur est une carte aux coins arrondis, la page reste visible (assombrie) au-dessus */
-.full{top:calc(var(--safe-t) + 10px);border-radius:26px 26px 0 0;padding-top:10px}
-.full.open{box-shadow:0 -1px 0 rgba(255,255,255,.06),0 0 0 100vmax rgba(0,0,0,.45)}
-@media (min-width:900px){.full{top:14px;left:14px;right:14px;bottom:14px;border-radius:16px}}
+/* téléphone : plein écran (jusque sous l'heure), coins arrondis seulement quand on le fait glisser — comme sur iPhone */
+.full{top:0;border-radius:0;padding-top:calc(10px + var(--safe-t));transition:transform .45s cubic-bezier(.2,.8,.2,1),border-radius .2s,visibility 0s .45s}
+.full.dragging{border-radius:38px 38px 0 0}
+.full.open{box-shadow:0 0 0 100vmax rgba(0,0,0,.45)}
+@media (min-width:900px){.full,.full.dragging{top:14px;left:14px;right:14px;bottom:14px;border-radius:16px;padding-top:10px}}
 .full .bgart{position:absolute;inset:-30%;background-size:cover;background-position:center;filter:blur(80px) saturate(1.7) brightness(.6);opacity:.9;z-index:-1}
 .full .shade{position:absolute;inset:0;z-index:-1;background:linear-gradient(rgba(10,8,12,.05),rgba(10,8,12,.6) 80%)}
 .fwrap{max-width:520px;width:100%;margin:0 auto;display:flex;flex-direction:column;flex:1;min-height:0}
@@ -2842,9 +2844,16 @@ $("#pp").innerHTML = $("#miniPP").innerHTML = ICON.play;
 document.querySelectorAll("[data-icon]").forEach(e => e.innerHTML = ICON[e.dataset.icon]);
 $("#lyrBtn").innerHTML = ICON.lyrics; $("#qBtn").innerHTML = ICON.queue; $("#routeBtn").innerHTML = ICON.airplay;
 
-function openFull(){ if(!queue.length && !radioMode) return; $("#full").classList.add("open"); document.body.classList.add("lock"); history.pushState({ k:"full" }, ""); }
+// la barre d'état de l'iPhone (heure, batterie) prend la couleur du lecteur quand il est ouvert → vrai plein écran
+function statusBar(dark){
+  document.querySelectorAll('meta[name="theme-color"]').forEach(m => {
+    if(!m.dataset.orig) m.dataset.orig = m.content;
+    m.content = dark ? "#16141a" : m.dataset.orig;
+  });
+}
+function openFull(){ if(!queue.length && !radioMode) return; $("#full").classList.add("open"); document.body.classList.add("lock"); statusBar(true); history.pushState({ k:"full" }, ""); }
 let ignorePop = false;
-function closeFull(fromPop){ if(!$("#full").classList.contains("open")) return; $("#full").classList.remove("open"); document.body.classList.remove("lock"); if(!fromPop && history.state?.k==="full"){ ignorePop = true; history.back(); } }
+function closeFull(fromPop){ if(!$("#full").classList.contains("open")) return; $("#full").classList.remove("open"); document.body.classList.remove("lock"); statusBar(false); if(!fromPop && history.state?.k==="full"){ ignorePop = true; history.back(); } }
 $("#openFull").onclick = $("#miniCv").onclick = openFull;
 $("#closeFull").onclick = () => closeFull();
 /* ---- glisser vers le bas pour fermer (lecteur plein écran et fenêtres), le doigt sur la barre du haut ---- */
@@ -2857,11 +2866,12 @@ function dragToClose(handle, panel, onClose, getStartOk){
     panel.style.transition = "none"; handle.setPointerCapture?.(e.pointerId);
   });
   handle.addEventListener("pointermove", e => {
-    if(!on) return; dy = Math.max(0, e.clientY - y0); if(dy > 4) moved = true;
+    if(!on) return; dy = Math.max(0, e.clientY - y0); if(dy > 4){ moved = true; panel.classList.add("dragging"); }
     panel.style.transform = `translateY(${dy}px)`;
   });
   const end = () => {
     if(!on) return; on = false;
+    setTimeout(() => panel.classList.remove("dragging"), 280);
     const v = dy / Math.max(1, performance.now() - t0);
     panel.style.transition = "transform .28s cubic-bezier(.2,.8,.2,1)";
     if(dy > Math.min(160, innerHeight * .22) || (v > .6 && dy > 30)){
@@ -4356,7 +4366,7 @@ function connStart(){
     // état en direct (morceau, lecture/pause, position, volume) : envoyé à chaque changement et toutes les 8 s
     ch.on("broadcast", { event:"state" }, ({ payload }) => { if(!payload?.from || payload.from === TAB_ID) return; peers[payload.from] = { ...(peers[payload.from]||{}), ...payload, seen: Date.now(), left: 0 }; connRefresh(); });
     ch.on("broadcast", { event:"cmd" }, ({ payload }) => { if(payload?.to === TAB_ID) onConnCmd(payload); });
-    ch.on("broadcast", { event:"ack" }, ({ payload }) => { if(payload?.to === TAB_ID && connWait.has(payload.mid)){ clearTimeout(connWait.get(payload.mid)); connWait.delete(payload.mid); } });
+    ch.on("broadcast", { event:"ack" }, ({ payload }) => { if(payload?.to === TAB_ID && connWait.has(payload.mid)){ clearTimeout(connWait.get(payload.mid)); connWait.delete(payload.mid); const f = connAcked.get(payload.mid); connAcked.delete(payload.mid); f?.(); } });
     ch.on("broadcast", { event:"hello" }, ({ payload }) => { if(payload?.from !== TAB_ID) connTrack(true); });
     ch.subscribe(st => {
       if(st === "SUBSCRIBED"){ connTrack(true); connHello(); }
@@ -4375,7 +4385,7 @@ function connState(){
   const t = queue[qi];
   return { from:TAB_ID, dev:DEV_ID, name:devName(), who:PROFILE?.name||"", emoji:PROFILE?.emoji||"", color:PROFILE?.color||"",
     t: radioMode ? { title:radioMode.name, artist: radioMeta || "Radio en direct", radio:{ uuid:radioMode.uuid, name:radioMode.name, url:radioMode.url, favicon:radioMode.favicon||"", tags:radioMode.tags||"", site:radioMode.site||"" } } : t ? { id:t.id, title:t.title, artist:t.artist||"", album:t.album||"", dur:audio.duration||t.duration||0 } : null,
-    playing: !audio.paused, pos: audio.currentTime||0, at: Date.now(), vol: baseVol(), canVol: CAN_VOL, mobile: !IS_DESKTOP };
+    playing: !audio.paused, pos: audio.currentTime||0, at: Date.now(), vol: baseVol(), canVol: CAN_VOL, mobile: !IS_DESKTOP, visible: !document.hidden };
 }
 function connTrack(now){
   if(!conn) return; clearTimeout(connT);
@@ -4383,7 +4393,7 @@ function connTrack(now){
 }
 ["play","playing","pause","seeked","loadedmetadata","emptied","volumechange"].forEach(ev => audio.addEventListener(ev, connTrack));
 setInterval(() => { if(conn && !document.hidden) connTrack(); else if(conn && !audio.paused) connTrack(); }, 8000); // « toujours là » + position recalée
-document.addEventListener("visibilitychange", () => { if(!document.hidden) connWake(); });
+document.addEventListener("visibilitychange", () => { if(!document.hidden) connWake(); else connTrack(true); });
 let connRT = 0, connDrag = false;
 function connRefresh(){ clearTimeout(connRT); connRT = setTimeout(() => { if(document.querySelector(".sheet .connS") && !connDrag) connectSheet(true); updConnBadge(); }, 60); }
 const peerAlive = v => !v.left && Date.now() - (v.seen || v.at || 0) < 40e3;
@@ -4396,17 +4406,32 @@ function updConnBadge(){
   b.title = other && audio.paused ? `En lecture sur ${other.name}` : "Appareils";
 }
 // commandes avec accusé de réception : renvoyées une fois si l'autre appareil ne répond pas, sinon on prévient
-const connWait = new Map();
-function connSend(to, op, extra = {}){
-  const mid = Math.random().toString(36).slice(2);
-  const fire = () => { try{ conn?.send({ type:"broadcast", event:"cmd", payload:{ to, from:TAB_ID, op, mid, ...extra } }); }catch{} };
-  if(!conn){ connWake(); setTimeout(fire, 1500); } else fire();
-  connWait.set(mid, setTimeout(() => {
-    connWake(); setTimeout(fire, 800);
-    connWait.set(mid, setTimeout(() => { connWait.delete(mid); toast(`${peers[to]?.name || "L'appareil"} ne répond pas — ouvre Écho dessus (écran allumé)`); }, 3500));
-  }, 2500));
+// Envoi « par la porte de secours » : l'API web de Supabase Realtime. Marche même quand la connexion directe
+// (websocket) de l'iPhone est en train de se refaire — c'est ce qui rendait l'envoi depuis le téléphone capricieux.
+async function connRest(event, payload){
+  try{
+    const tok = await accessToken().catch(() => cfg.key);
+    await fetch(`${cfg.url}/realtime/v1/api/broadcast`, { method:"POST", headers:{ "Content-Type":"application/json", apikey:cfg.key, Authorization:"Bearer " + tok },
+      body: JSON.stringify({ messages:[{ topic:"connect-" + user.id, event, payload, private:false }] }) });
+  }catch{}
 }
-function connAck(m){ try{ conn?.send({ type:"broadcast", event:"ack", payload:{ to:m.from, mid:m.mid } }); }catch{} }
+const connWait = new Map(), connAcked = new Map();
+// onAck : appelé quand l'autre appareil a bien reçu (ex. on ne coupe le son ici qu'une fois le transfert confirmé)
+function connSend(to, op, extra = {}, onAck){
+  const mid = Math.random().toString(36).slice(2);
+  const payload = { to, from:TAB_ID, op, mid, ...extra };
+  const live = conn && conn.state === "joined";
+  if(live){ try{ conn.send({ type:"broadcast", event:"cmd", payload }); }catch{ connRest("cmd", payload); } }
+  else { connWake(); connRest("cmd", payload); }
+  // ordres importants : envoyés aussi tout de suite par l'API web (en double sans risque, l'autre appareil ignore les doublons)
+  if(live && (op === "play" || op === "pull")) connRest("cmd", payload);
+  if(onAck) connAcked.set(mid, onAck);
+  connWait.set(mid, setTimeout(() => {
+    connWake(); connRest("cmd", payload); // 2e essai par l'API web
+    connWait.set(mid, setTimeout(() => { connWait.delete(mid); connAcked.delete(mid); toast(`${peers[to]?.name || "L'appareil"} ne répond pas — ouvre Écho dessus (écran allumé)`); }, 4000));
+  }, 2000));
+}
+function connAck(m){ const p = { to:m.from, mid:m.mid }; try{ if(conn?.state === "joined") conn.send({ type:"broadcast", event:"ack", payload:p }); else connRest("ack", p); }catch{ connRest("ack", p); } }
 function onConnCmd(m){
   if(m.mid){ if(onConnCmd.seen?.has(m.mid)) return; (onConnCmd.seen ||= new Set()).add(m.mid); connAck(m); }
   if(m.op === "toggle") return toggle();
@@ -4427,7 +4452,7 @@ function onConnCmd(m){
   }
   if(m.op === "pull"){ // un autre appareil veut reprendre ma lecture
     const p = playPayload(); if(!p) return;
-    connSend(m.from, "play", p); audio.pause(); toast("Lecture transférée");
+    connSend(m.from, "play", p, () => { audio.pause(); toast("Lecture transférée"); });
   }
 }
 // ce que j'écoute, pour l'envoyer à un autre appareil (morceaux + position, ou la radio)
@@ -4457,7 +4482,7 @@ function connectSheet(refresh){
   if(!refresh){ connWake(); connHello(); }
   // les appareils partis depuis plus de 5 min disparaissent ; ceux sans nouvelles depuis 40 s sont « en veille »
   for(const [k, v] of Object.entries(peers)) if(Date.now() - (v.seen || v.at || 0) > 300e3) delete peers[k];
-  const list = Object.entries(peers).sort((a,b) => (peerAlive(b[1])?1:0)-(peerAlive(a[1])?1:0) || (b[1].playing?1:0)-(a[1].playing?1:0) || (b[1].t?1:0)-(a[1].t?1:0));
+  const list = Object.entries(peers).sort((a,b) => (peerAlive(b[1])?1:0)-(peerAlive(a[1])?1:0) || (b[1].playing?1:0)-(a[1].playing?1:0) || (b[1].visible!==false?1:0)-(a[1].visible!==false?1:0) || (b[1].t?1:0)-(a[1].t?1:0));
   const label = v => esc(v.name) + (v.dev === DEV_ID ? ` <small>(autre fenêtre)</small>` : "");
   const thumb = (v, cls) => { const t = v?.t?.id && byId.get(v.t.id);
     if(!t && v?.t?.radio){ const u = LOGO[v.t.radio.name] || logoOK.get(v.t.radio.uuid) || v.t.radio.favicon; if(u) return `<div class="cv ${cls||""}" style="background:#fff url('${cssUrl(u)}') center/70% no-repeat"></div>`; }
@@ -4502,7 +4527,7 @@ function connectSheet(refresh){
     if(k==="c-next"){ connSend(connSel, "next"); return true; }
     if(k==="c-prev"){ connSend(connSel, "prev"); return true; }
     if(k==="c-pull"){ connSend(connSel, "pull"); toast("Transfert…"); return; }
-    if(k==="c-push"){ const pl = playPayload(); if(!pl) return true; connSend(connSel, "play", pl); audio.pause(); toast(`Lecture envoyée vers ${p.name}`); return; }
+    if(k==="c-push"){ const pl = playPayload(); if(!pl) return true; toast(`Envoi vers ${p.name}…`); connSend(connSel, "play", pl, () => { audio.pause(); toast(`Lecture envoyée vers ${p.name}`); }); return; }
     return true;
   };
   const open = document.querySelector(".sheet .connS");
@@ -4948,7 +4973,7 @@ async function uploadOne(f, prog){
 if("serviceWorker" in navigator && (location.protocol==="https:" || location.hostname==="localhost")) navigator.serviceWorker.register("sw.js").catch(()=>{});
 
 /* ============ mises à jour : sur iPhone l'app reste ouverte des jours, on vérifie à chaque retour ============ */
-const ECHO_BUILD = "2026-10-24.19";
+const ECHO_BUILD = "2026-10-24.21";
 let updPending = false, lastUpdCheck = 0;
 async function checkUpdate(){
   if(!navigator.onLine || Date.now() - lastUpdCheck < 60e3) return; lastUpdCheck = Date.now();
