@@ -1148,6 +1148,7 @@ async function enter(){
   setTimeout(() => prefetchTops(), 4000);
   setTimeout(() => startBackgroundSync(), 7000);
   setTimeout(() => connStart(), 1200);
+  setTimeout(() => bgTagLoop(), 45000); // correction Apple Music des morceaux pas encore traités
   if(location.hash==="#notifs") setTimeout(notifSheet, 300);
   if(location.hash.startsWith("#recap")) go(location.hash.length>7 ? location.hash.slice(1) : "recap");
   if(location.hash) history.replaceState(null, "", location.pathname);
@@ -3732,9 +3733,27 @@ async function runAutoTag(){
   const list = tracks.filter(t => ids.has(t.id) && !t.tag_status);
   if(list.length){ toast(`Vérification de ${nMorceaux(list.length)} sur Apple Music…`); await amRunAll(list); }
 }
+/* ---- correction en arrière-plan des morceaux déjà présents (sur le PC, quand Écho est ouvert) ----
+   Chaque morceau traité garde une marque invisible (tag_status : auto / review / none / kept) : il n'est jamais refait,
+   même depuis un autre appareil. On avance par paquets de 120 et on reprend où on s'était arrêté. */
+let bgTag = { on:false };
+async function bgTagLoop(){
+  if(bgTag.on || !IS_DESKTOP || LS.get("amAuto", true) === false) return;
+  bgTag.on = true;
+  try{
+    for(;;){
+      if(LS.get("amAuto", true) === false || offlineMode || !navigator.onLine){ await new Promise(r => setTimeout(r, 60000)); continue; }
+      if(amState.on || upActive){ await new Promise(r => setTimeout(r, 30000)); continue; }
+      const todo = tracks.filter(t => !t.tag_status).slice(0, 120);
+      if(!todo.length) break;
+      await amRunAll(todo, true);
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  } finally { bgTag.on = false; }
+}
 let amState = { on:false, done:0, total:0, auto:0, review:0, none:0 };
-async function amRunAll(only){
-  if(amState.on) return; if(offlineMode || !navigator.onLine) return toast("Connexion requise");
+async function amRunAll(only, silent){
+  if(amState.on) return; if(offlineMode || !navigator.onLine) return silent ? null : toast("Connexion requise");
   const todo = (only || tracks.filter(t => !t.tag_status)).slice();
   amState = { on:true, done:0, total:todo.length, auto:0, review:0, none:0 }; amUI();
   const groups = new Map(), singles = [];
@@ -3760,8 +3779,8 @@ async function amRunAll(only){
     rebuild(); if(/^(home|albums|artists|songs|library)/.test(curR().r)) render();
   }
   for(const t of singles) await solo(t);
-  amState.on = false; amUI(); rebuild(); render(); saveCache();
-  toast(`Apple Music : ${amState.auto} corrigé${amState.auto>1?"s":""}, ${amState.review} à vérifier`);
+  amState.on = false; amUI(); rebuild(); if(!silent || /^(home|search|albums|artists|songs|library|genre|cleanup)/.test(curR().r)) render(); saveCache();
+  if(!silent) toast(`Apple Music : ${amState.auto} corrigé${amState.auto>1?"s":""}, ${amState.review} à vérifier`);
 }
 function amUI(){
   const el = document.getElementById("amInfo"); if(!el) return;
@@ -4271,7 +4290,7 @@ async function settingsSheet(){
     ${it("push","bell","Notifications push","","",pushState())}
     ${it("oracle","upload","Stockage Oracle (200 Go gratuits)","","", ORA ? (tracks.some(t=>!isOra(t.path)) ? "À transférer" : "Actif") : "Non configuré")}
     ${CAN_VOL ? it("fade","shuffle","Fondu enchaîné","","", LS.get("fade",0) ? LS.get("fade",0)+" s" : "Désactivé") + it("norm","sparkle","Volume égalisé", LS.get("norm",false)?"on":"", "", LS.get("norm",false)?"Activé":"Désactivé") : it("noios","shuffle","Fondu enchaîné · volume égalisé","","","Pas sur iPhone")}
-    ${it("amauto","sparkle","Corriger les nouveaux morceaux avec Apple Music", LS.get("amAuto",true)?"on":"", "", LS.get("amAuto",true)?"Activé":"Désactivé")}
+    ${it("amauto","sparkle","Corriger la bibliothèque avec Apple Music", LS.get("amAuto",true)?"on":"", "", LS.get("amAuto",true) ? (()=>{ const d = tracks.filter(t=>t.tag_status).length; return d >= tracks.length ? "Tout est fait" : `${d.toLocaleString("fr-FR")} / ${tracks.length.toLocaleString("fr-FR")}`; })() : "Désactivé")}
     ${it("kb","album","Pochettes animées", LS.get("kb",true)?"on":"", "", LS.get("kb",true)?"Activé":"Désactivé")}
     ${it("kara","lyrics","Paroles mot à mot (karaoké)", LS.get("karaoke",true)?"on":"", "", LS.get("karaoke",true)?"Activé":"Désactivé")}
     ${it("auto","infinity","Lecture automatique", autoplay?"on":"", "", autoplay?"Activée":"Désactivée")}
@@ -4292,7 +4311,7 @@ async function settingsSheet(){
     if(s==="noios"){ sheet(`<h3>Fondu enchaîné sur iPhone</h3><p class="note" style="line-height:1.5">Sur iPhone, Apple interdit aux sites et aux apps web de changer le volume du son : seul le bouton de volume du téléphone le peut. Le fondu enchaîné et le volume égalisé ont besoin de baisser et monter le volume, donc ils ne peuvent pas marcher dans Écho sur iPhone.<br><br>La seule autre méthode (passer le son par un « mixeur » interne) couperait la musique dès que l'écran se verrouille, ce qui serait bien pire.<br><br>Ils marchent sur ton PC et sur Android.</p>${it("ok","x","Compris")}`, () => {}); return true; }
     if(s==="fade"){ const o = [0,3,6,9,12], v = o[(o.indexOf(LS.get("fade",0))+1) % o.length]; LS.set("fade", v); if(!v) audio.volume = baseVol(); toast(v ? `Fondu enchaîné : ${v} s` : "Fondu enchaîné désactivé"); return settingsSheet(), true; }
     if(s==="norm"){ const v = !LS.get("norm",false); LS.set("norm", v); if(v){ normOn(); toast("Volume égalisé activé"); } else { toast("Désactivé au prochain lancement d'Écho"); } return settingsSheet(), true; }
-    if(s==="amauto"){ LS.set("amAuto", !LS.get("amAuto",true)); toast(LS.get("amAuto",true) ? "Les nouveaux morceaux seront vérifiés sur Apple Music" : "Correction automatique désactivée"); return settingsSheet(), true; }
+    if(s==="amauto"){ LS.set("amAuto", !LS.get("amAuto",true)); const on = LS.get("amAuto",true); toast(on ? (IS_DESKTOP ? "Correction de toute la bibliothèque lancée (en arrière-plan)" : "Activé — la correction tourne sur ton PC quand Écho y est ouvert") : "Correction automatique désactivée"); if(on) bgTagLoop(); return settingsSheet(), true; }
     if(s==="kb"){ LS.set("kb", !LS.get("kb",true)); $("#full").classList.toggle("kb", LS.get("kb",true)); return settingsSheet(), true; }
     if(s==="kara"){ LS.set("karaoke", !LS.get("karaoke",true)); if($("#full").dataset.mode==="lyrics") showLyrics(); return settingsSheet(), true; }
     if(s==="auto"){ autoplay=!autoplay; LS.set("autoplay",autoplay); toast(autoplay?"Lecture automatique activée":"Lecture automatique désactivée"); }
@@ -4928,7 +4947,7 @@ async function uploadOne(f, prog){
 if("serviceWorker" in navigator && (location.protocol==="https:" || location.hostname==="localhost")) navigator.serviceWorker.register("sw.js").catch(()=>{});
 
 /* ============ mises à jour : sur iPhone l'app reste ouverte des jours, on vérifie à chaque retour ============ */
-const ECHO_BUILD = "2026-10-24.17";
+const ECHO_BUILD = "2026-10-24.18";
 let updPending = false, lastUpdCheck = 0;
 async function checkUpdate(){
   if(!navigator.onLine || Date.now() - lastUpdCheck < 60e3) return; lastUpdCheck = Date.now();
