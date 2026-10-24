@@ -1494,9 +1494,9 @@ const primaryArtist = n => String(n||"").split(/\s+(?:feat\.?|ft\.?|featuring|x|
 const DZ_EMPTY = /\/artist\/\/|images\/artist\/\/|\/artist\/?$/;
 function artUrl(name){
   const o = artOv.get(name);
-  if(o){ if(o.image_path && urls[o.image_path]) return urls[o.image_path]; if(o.image_url) return o.image_url; }
-  // 1) photo Apple Music (les mêmes images que dans l'app Musique), 2) sinon Deezer
-  return LS.get("art4:"+name, null) || LS.get("art2:"+name, null) || null;
+  if(o){ if(o.image_path && urls[o.image_path]) return urls[o.image_path]; if(o.image_url) return o.image_url; } // photo choisie à la main
+  // uniquement la photo Apple Music (les mêmes images que dans l'app Musique) ; sinon la pochette de l'artiste
+  return LS.get("art4:"+name, null) || null;
 }
 // photos Apple Music, demandées par lots de 25 à la fonction « artimg » (cache serveur 30 jours)
 async function appleArtistPhotos(names){
@@ -1556,12 +1556,24 @@ async function findArtistPhoto(name){
   return exact[0]?.picture_xl || "";
 }
 const artQ = []; let artBusy = 0;
+try{ if(!localStorage.getItem("echo.artApple1")){ Object.keys(localStorage).filter(k => k.startsWith("echo.art2:") || (k.startsWith("echo.art4:") && localStorage.getItem(k) === '""')).forEach(k => localStorage.removeItem(k)); localStorage.setItem("echo.artApple1", "1"); } }catch{}
+// en fond : on va chercher les photos Apple Music de TOUS les artistes (pas seulement ceux à l'écran), doucement
+let artAllT = 0;
+function artPrefetchAll(){
+  clearTimeout(artAllT);
+  artAllT = setTimeout(() => {
+    if(offlineMode || !navigator.onLine || artQ.length) return;
+    const miss = [...new Set(artists.map(a => a.name))].filter(n => n !== "Artiste inconnu" && LS.get("art4:"+n, null) === null && !artOv.get(n)?.image_path);
+    if(!miss.length) return;
+    artQ.push(...miss.slice(0, 25)); pumpArt(); artPrefetchAll();
+  }, 4000);
+}
 function loadArtistImages(){
   document.querySelectorAll("[data-artimg]").forEach(el => {
     const n = el.dataset.artimg;
     if(artOv.get(n)?.image_url || artOv.get(n)?.image_path || LS.get("art4:"+n, null) !== null || n==="Artiste inconnu" || artQ.includes(n)) return; artQ.push(n);
   });
-  pumpArt();
+  pumpArt(); artPrefetchAll();
 }
 function pumpArt(){
   if(offlineMode) return;
@@ -1572,9 +1584,7 @@ function pumpArt(){
         const u = res[n];
         if(u){ LS.set("art4:"+n, u); refreshArtImg(n); continue; }
         if(!(n in res)){ continue; } // serveur injoignable : on réessaiera plus tard
-        LS.set("art4:"+n, "");
-        // pas de photo chez Apple : on garde l'ancienne recherche Deezer
-        if(LS.get("art2:"+n, null) === null){ const d = await findArtistPhoto(n).catch(()=>null); LS.set("art2:"+n, d||""); }
+        LS.set("art4:"+n, ""); // pas de photo chez Apple : on montre sa pochette
         refreshArtImg(n);
       }
     }).catch(()=>{}).finally(() => { artBusy--; pumpArt(); });
@@ -5074,7 +5084,7 @@ async function uploadOne(f, prog){
 if("serviceWorker" in navigator && (location.protocol==="https:" || location.hostname==="localhost")) navigator.serviceWorker.register("sw.js").catch(()=>{});
 
 /* ============ mises à jour : sur iPhone l'app reste ouverte des jours, on vérifie à chaque retour ============ */
-const ECHO_BUILD = "2026-10-24.24";
+const ECHO_BUILD = "2026-10-24.25";
 let updPending = false, lastUpdCheck = 0;
 async function checkUpdate(){
   if(!navigator.onLine || Date.now() - lastUpdCheck < 60e3) return; lastUpdCheck = Date.now();
