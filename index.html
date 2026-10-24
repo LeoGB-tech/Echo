@@ -270,6 +270,10 @@ main#view{max-width:1100px;margin:0 auto;padding:0 16px}
 .full{position:fixed;inset:0;z-index:60;background:#120f16;display:flex;flex-direction:column;
   padding:calc(10px + var(--safe-t)) 24px calc(18px + var(--safe-b));transform:translateY(100%);transition:transform .45s cubic-bezier(.2,.8,.2,1),visibility 0s .45s;overflow:hidden;visibility:hidden}
 .full.open{transform:none;visibility:visible;transition-delay:0s}
+/* comme Apple Music : le lecteur est une carte aux coins arrondis, la page reste visible (assombrie) au-dessus */
+.full{top:calc(var(--safe-t) + 10px);border-radius:26px 26px 0 0;padding-top:10px}
+.full.open{box-shadow:0 -1px 0 rgba(255,255,255,.06),0 0 0 100vmax rgba(0,0,0,.45)}
+@media (min-width:900px){.full{top:14px;left:14px;right:14px;bottom:14px;border-radius:16px}}
 .full .bgart{position:absolute;inset:-30%;background-size:cover;background-position:center;filter:blur(80px) saturate(1.7) brightness(.6);opacity:.9;z-index:-1}
 .full .shade{position:absolute;inset:0;z-index:-1;background:linear-gradient(rgba(10,8,12,.05),rgba(10,8,12,.6) 80%)}
 .fwrap{max-width:520px;width:100%;margin:0 auto;display:flex;flex-direction:column;flex:1;min-height:0}
@@ -2229,6 +2233,8 @@ function action(a, arg, el){
     case "cl-fix": return amRunAll(cleanScan().noinfo);
     case "cl-del": { const l = (arg==="broken" ? cleanScan().broken : []); return deleteTracks(l).then(() => { LS.set("broken", []); render(); }); }
     case "cl-forget": LS.set("broken", []); return render();
+    case "clip-scan": return clipScanRun();
+    case "clip-export": return clipExport();
     case "edit-smart": return smartForm(playlists.find(x=>x.id===arg));
     case "pl-edit": plEdit = !plEdit; return render();
     case "pl-rm": return removeFromPl(arg);
@@ -3453,13 +3459,19 @@ function cleanScan(){
 // mais on garde tout ce qui change le son (remix, drumless, live, acoustique, instrumental, version, extended…).
 const VERSION_RX = /remix|\bmix\b|drumless|instrumental|acoustic|acoustique|\blive\b|extended|slowed|sped|nightcore|karaoke|\bdemo\b|a ?cappella|acapella|\bversion\b|rework|bootleg|edit(?!ion)(?<!radio edit)|reprise|orchestral|piano|unplugged/i;
 const SAME_RX = /feat\.?|\bft\.?|\bwith\b|\bavec\b|\bfrom\b|bonus|explicit|\bclean\b|radio edit|single version|album version|deluxe|original mix|remaster|\bprod\.?/i;
+// Doublon = EXACTEMENT la même version : « Smooth Criminal (Radio Edit) » et « Smooth Criminal - 2012 Remaster » sont deux
+// versions différentes et restent toutes les deux. Seuls la casse, les accents, la ponctuation et la mention « feat. »
+// (parfois dans le titre, parfois dans l'artiste) sont ignorés.
 function dupTitle(x){
-  const strip = m => { const core = m.replace(/single version|album version|radio edit|original mix/ig, ""); return SAME_RX.test(m) && !VERSION_RX.test(core) ? "" : m; };
-  let s = String(x||"").replace(/\s*[\(\[][^\)\]]*[\)\]]/g, strip);
-  s = s.replace(/\s+[-–—]\s+.*$/, m => VERSION_RX.test(m.replace(/radio edit|single version|album version|original mix/ig,"")) ? m : (SAME_RX.test(m) || /remaster/i.test(m) ? "" : m));
+  const s = String(x||"")
+    .replace(/\s*[\(\[]\s*(?:feat\.?|ft\.?|featuring|with|avec)\s[^\)\]]*[\)\]]/gi, "")
+    .replace(/\s+(?:feat\.?|ft\.?|featuring)\s.*$/i, "")
+    .replace(/[\(\)\[\]]/g, " ").replace(/\s+[-–—]\s+/g, " ");
   return norm(s);
 }
-const extraTag = t => /[\(\[]|\s[-–—]\s/.test(t.title||"") ? 1 : 0;
+// version à garder : la remasterisée (meilleur son, celle qu'Apple Music met en avant) ; on écarte d'abord
+// « Radio Edit », « Bonus Track », « Single Version »… ; à égalité, le titre le plus propre
+const extraTag = t => 0; // même version : on garde simplement la meilleure qualité (format, débit, pochette, paroles)
 const quality = t => { const ext = rp(t.path).split(".").pop().toLowerCase(); const kbps = t.size && t.duration ? t.size*8/t.duration/1000 : 0; return (ext==="flac"||ext==="wav" ? 10000 : 0) + Math.round(kbps/32)*32 + (coverOf(t) ? 5 : 0) + (t.lyrics ? 2 : 0) - extraTag(t)*1.5 + Math.min(t.play_count||0, 50)*.01; };
 const qLabel = t => { const ext = rp(t.path).split(".").pop().toUpperCase(); const kbps = t.size && t.duration ? Math.round(t.size*8/t.duration/1000) : 0; return `${ext}${kbps?` · ${kbps} kb/s`:""}${t.size?` · ${(t.size/1048576).toFixed(1)} Mo`:""}`; };
 function vCleanup(){
@@ -3474,7 +3486,77 @@ function vCleanup(){
   h += `<div class="sec"><h3>Infos incomplètes</h3>${c.noinfo.length?`<button data-act="cl-fix">Corriger avec Apple Music</button>`:""}</div>`;
   h += c.noinfo.length ? `<div class="list">${c.noinfo.slice(0,100).map(t=>tRow(t,keyN,{ sub: [!t.artist&&"artiste manquant", !t.album&&"album manquant"].filter(Boolean).join(" · ") || esc(t.artist||"") })).join("")}</div>${c.noinfo.length>100?`<p class="note">… et ${c.noinfo.length-100} autres</p>`:""}` : `<p class="note">Tous les morceaux ont un titre, un artiste et un album.</p>`;
   h += `<div class="sec"><h3>Sans pochette</h3></div><p class="note">${c.nocover.length ? `${nMorceaux(c.nocover.length)} sans pochette. « Infos Apple Music » ajoute les pochettes officielles.` : "Toutes tes pochettes sont là."}</p>`;
+  h += clipSection();
   return h;
+}
+/* ============ versions clip : repérées en silence, copiées dans un dossier du PC (rien n'est modifié sur le site) ============
+   Un morceau est une « version clip » quand Apple Music a le même titre du même artiste mais avec une durée qui diffère
+   de plus de 3 s (intro / fin du clip). Le résultat reste sur cet appareil : pas d'étiquette, pas de changement d'infos. */
+let clipScan = LS.get("clipScan", {}), clipRun = null;
+function clipVerdict(t, xs){ // xs : résultats Apple Music
+  const same = (xs||[]).map(x => ({ x, sc:songScore(t, x) })).filter(o => o.sc.ts >= .92 && o.sc.as >= .85 && o.sc.dd != null);
+  if(!same.length) return null;                       // inconnu chez Apple : on ne dit rien
+  if(same.some(o => o.sc.dd <= 3)) return { c:0 };     // la version Apple a la même durée → bonne version
+  const b = same.sort((a,b) => a.sc.dd - b.sc.dd)[0];
+  return { c:1, d:Math.round(b.x.trackTimeMillis/1000), u:b.x.trackViewUrl || "" };
+}
+const clipList = () => tracks.filter(t => clipScan[t.id]?.c === 1);
+function clipSection(){
+  const done = tracks.filter(t => t.id in clipScan || t.tag_status === "auto" || t.tag_status === "manual").length, l = clipList();
+  return `<div class="sec"><h3>Versions clip</h3></div>
+    <p class="note">Morceaux dont la durée diffère de plus de 3 s de la version d'Apple Music (souvent la version du clip). Rien n'est modifié : Écho crée seulement un dossier sur ton PC avec ces fichiers, pour les repasser dans Nami.</p>
+    <p class="note" id="clipInfo">${clipRun ? `Analyse : ${clipRun.done} / ${clipRun.total}…` : `${nMorceaux(l.length)} repéré${l.length>1?"s":""} · ${done} / ${tracks.length} analysés`}</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;padding:4px 0 10px">
+      <button class="btn btn-ghost" data-act="clip-scan">${ICON.search}${clipRun ? "Arrêter" : done < tracks.length ? "Analyser la bibliothèque" : "Analyser les nouveaux morceaux"}</button>
+      ${l.length ? `<button class="btn btn-main" data-act="clip-export">${ICON.down}Créer le dossier sur le PC (${l.length})</button>` : ""}
+    </div>`;
+}
+function clipInfo(){ const el = $("#clipInfo"); if(el && clipRun) el.textContent = `Analyse : ${clipRun.done} / ${clipRun.total} · ${clipList().length} version${clipList().length>1?"s":""} clip trouvée${clipList().length>1?"s":""}`; }
+async function clipScanRun(){
+  if(clipRun){ clipRun.stop = true; return; }
+  if(offlineMode || !navigator.onLine) return toast("Connexion requise");
+  // déjà connus sans recherche : corrigés automatiquement (durée identique) ou avec des propositions enregistrées
+  for(const t of tracks){ if(t.id in clipScan) continue;
+    if(t.tag_status === "auto" || t.tag_status === "manual") clipScan[t.id] = { c:0 };
+    else if(t.tag_status === "review" && t.tag_review?.length){ const v = clipVerdict(t, t.tag_review.map(r => ({ trackName:r.title, artistName:r.artist, collectionArtistName:r.album_artist, trackTimeMillis:(r.dur||0)*1000, trackViewUrl:r.url }))); if(v) clipScan[t.id] = v; } }
+  LS.set("clipScan", clipScan);
+  const todo = tracks.filter(t => !(t.id in clipScan) && t.duration);
+  clipRun = { done:0, total:todo.length, stop:false }; render();
+  for(const t of todo){
+    if(clipRun.stop) break;
+    const term = `${primaryArtist(t.artist || t.album_artist || "")} ${String(t.title).replace(/\s*[\(\[].*?[\)\]]/g,"")}`.trim();
+    const r = await itunes(`search?term=${encodeURIComponent(term)}&entity=song&limit=25`);
+    if(r){ clipScan[t.id] = clipVerdict(t, (r.results||[]).filter(x => x.kind==="song")) || { c:0, n:1 }; }
+    clipRun.done++; if(clipRun.done % 10 === 0) LS.set("clipScan", clipScan); clipInfo();
+  }
+  LS.set("clipScan", clipScan); const n = clipList().length; clipRun = null; render();
+  toast(`${n} version${n>1?"s":""} clip repérée${n>1?"s":""}`);
+}
+async function clipExport(){
+  const l = clipList(); if(!l.length) return;
+  const safe = s => String(s||"").replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
+  const name = t => `${safe(t.artist || t.album_artist || "Artiste inconnu")} - ${safe(t.title)}.${rp(t.path).split(".").pop()}`;
+  const listTxt = l.map(t => `${t.artist || t.album_artist || ""} - ${t.title}`).join("\r\n") + "\r\n";
+  const linksTxt = l.map(t => `${t.artist || t.album_artist || ""} - ${t.title}\t${fmt(t.duration)} (fichier) / ${fmt(clipScan[t.id].d)} (Apple Music)\t${clipScan[t.id].u||""}`).join("\r\n") + "\r\n";
+  const getBlob = async t => { const u = (t.parts||1) > 1 ? await partsBlobUrl(t) : (urls[t.path] || (Object.assign(urls, await signPaths([t.path])), urls[t.path])); const r = await fetch(u); if(!r.ok) throw new Error("HTTP " + r.status); return r.blob(); };
+  if(window.showDirectoryPicker){ // Chrome / Edge sur PC : on écrit directement un dossier
+    let root; try{ root = await showDirectoryPicker({ mode:"readwrite", id:"echo-clips", startIn:"music" }); }catch{ return; }
+    const dir = await root.getDirectoryHandle("Écho - versions clip", { create:true });
+    const write = async (fname, data) => { const fh = await dir.getFileHandle(fname, { create:true }); const w = await fh.createWritable(); await w.write(data); await w.close(); };
+    await write("liste.txt", listTxt); await write("liste avec liens Apple Music.txt", linksTxt);
+    let i = 0, fail = 0;
+    for(const t of l){ i++; toast(`Copie des fichiers… ${i} / ${l.length}`); try{ await write(name(t), await getBlob(t)); }catch{ fail++; } }
+    toast(`Dossier « Écho - versions clip » créé : ${l.length - fail} fichier${l.length-fail>1?"s":""}${fail?`, ${fail} en échec`:""}`);
+    return;
+  }
+  // autres navigateurs : un fichier .zip à décompresser
+  toast("Préparation du fichier .zip…");
+  if(!window.JSZip) await new Promise((ok, ko) => { const s = document.createElement("script"); s.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"; s.onload = ok; s.onerror = ko; document.head.appendChild(s); });
+  const zip = new JSZip(), f = zip.folder("Écho - versions clip");
+  f.file("liste.txt", listTxt); f.file("liste avec liens Apple Music.txt", linksTxt);
+  let i = 0; for(const t of l){ i++; toast(`Préparation… ${i} / ${l.length}`); try{ f.file(name(t), await getBlob(t)); }catch{} }
+  const blob = await zip.generateAsync({ type:"blob", compression:"STORE" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "Écho - versions clip.zip"; document.body.appendChild(a); a.click(); a.remove();
 }
 async function cleanDups(gi){
   const c = cleanScan(); const groups = gi == null ? c.dups : [c.dups[+gi]].filter(Boolean);
@@ -3627,6 +3709,29 @@ async function amMatchAlbum(group){
   }
   return null;
 }
+// Même quand la fiche n'est pas sûre à 100 % (durée différente : version clip, remaster…), le GENRE d'Apple Music est fiable
+// si le titre et l'artiste correspondent bien et que les résultats sont d'accord entre eux → on corrige seulement le genre.
+function genreOnly(t, xs){
+  const good = (xs||[]).map(x => ({ x, sc:songScore(t, x) })).filter(o => o.sc.ts >= .85 && o.sc.as >= .85 && o.x.primaryGenreName);
+  if(!good.length) return {};
+  const g = good[0].x.primaryGenreName;
+  if(good.some(o => genreKey(o.x.primaryGenreName) !== genreKey(g)) || t.genre === g) return {};
+  return { genre:g };
+}
+/* ---- après un envoi : les nouveaux morceaux sont vérifiés tout seuls sur Apple Music (titre, artiste, album, genre, pochette) ---- */
+let autoTagQ = [], autoTagT = 0;
+function queueAutoTag(t){
+  if(LS.get("amAuto", true) === false) return;
+  autoTagQ.push(t.id); clearTimeout(autoTagT);
+  autoTagT = setTimeout(runAutoTag, 15000);
+}
+async function runAutoTag(){
+  if(!autoTagQ.length) return;
+  if(amState.on || upActive || offlineMode || !navigator.onLine){ clearTimeout(autoTagT); autoTagT = setTimeout(runAutoTag, 30000); return; }
+  const ids = new Set(autoTagQ.splice(0));
+  const list = tracks.filter(t => ids.has(t.id) && !t.tag_status);
+  if(list.length){ toast(`Vérification de ${nMorceaux(list.length)} sur Apple Music…`); await amRunAll(list); }
+}
 let amState = { on:false, done:0, total:0, auto:0, review:0, none:0 };
 async function amRunAll(only){
   if(amState.on) return; if(offlineMode || !navigator.onLine) return toast("Connexion requise");
@@ -3640,7 +3745,7 @@ async function amRunAll(only){
     const m = await amMatchSong(t);
     if(m.error){ step(); return; }
     if(m.auto){ await amApply(t, amCand(m.auto), "auto"); amState.auto++; }
-    else if(m.review?.length){ await upd(t.id, { tag_status:"review", tag_review:m.review.map(amCand) }); amState.review++; }
+    else if(m.review?.length){ await upd(t.id, { tag_status:"review", tag_review:m.review.map(amCand), ...genreOnly(t, m.review) }); amState.review++; }
     else { await upd(t.id, { tag_status:"none" }); amState.none++; }
     step();
   };
@@ -3649,7 +3754,7 @@ async function amRunAll(only){
     const res = g.tracks.length >= 2 ? await amMatchAlbum(g) : null;
     if(res){
       for(const [t, x] of res.auto){ await amApply(t, amCand(x), "auto"); amState.auto++; step(); }
-      for(const [t, xs] of res.review){ const m = await amMatchSong(t); if(m.auto){ await amApply(t, amCand(m.auto), "auto"); amState.auto++; } else { await upd(t.id, { tag_status:"review", tag_review:[...xs, ...(m.review||[])].slice(0,5).map(amCand) }); amState.review++; } step(); }
+      for(const [t, xs] of res.review){ const m = await amMatchSong(t); if(m.auto){ await amApply(t, amCand(m.auto), "auto"); amState.auto++; } else { const all = [...xs, ...(m.review||[])]; await upd(t.id, { tag_status:"review", tag_review:all.slice(0,5).map(amCand), ...genreOnly(t, all) }); amState.review++; } step(); }
       for(const t of res.rest) await solo(t);
     } else for(const t of g.tracks) await solo(t);
     rebuild(); if(/^(home|albums|artists|songs|library)/.test(curR().r)) render();
@@ -4166,6 +4271,7 @@ async function settingsSheet(){
     ${it("push","bell","Notifications push","","",pushState())}
     ${it("oracle","upload","Stockage Oracle (200 Go gratuits)","","", ORA ? (tracks.some(t=>!isOra(t.path)) ? "À transférer" : "Actif") : "Non configuré")}
     ${CAN_VOL ? it("fade","shuffle","Fondu enchaîné","","", LS.get("fade",0) ? LS.get("fade",0)+" s" : "Désactivé") + it("norm","sparkle","Volume égalisé", LS.get("norm",false)?"on":"", "", LS.get("norm",false)?"Activé":"Désactivé") : it("noios","shuffle","Fondu enchaîné · volume égalisé","","","Pas sur iPhone")}
+    ${it("amauto","sparkle","Corriger les nouveaux morceaux avec Apple Music", LS.get("amAuto",true)?"on":"", "", LS.get("amAuto",true)?"Activé":"Désactivé")}
     ${it("kb","album","Pochettes animées", LS.get("kb",true)?"on":"", "", LS.get("kb",true)?"Activé":"Désactivé")}
     ${it("kara","lyrics","Paroles mot à mot (karaoké)", LS.get("karaoke",true)?"on":"", "", LS.get("karaoke",true)?"Activé":"Désactivé")}
     ${it("auto","infinity","Lecture automatique", autoplay?"on":"", "", autoplay?"Activée":"Désactivée")}
@@ -4186,6 +4292,7 @@ async function settingsSheet(){
     if(s==="noios"){ sheet(`<h3>Fondu enchaîné sur iPhone</h3><p class="note" style="line-height:1.5">Sur iPhone, Apple interdit aux sites et aux apps web de changer le volume du son : seul le bouton de volume du téléphone le peut. Le fondu enchaîné et le volume égalisé ont besoin de baisser et monter le volume, donc ils ne peuvent pas marcher dans Écho sur iPhone.<br><br>La seule autre méthode (passer le son par un « mixeur » interne) couperait la musique dès que l'écran se verrouille, ce qui serait bien pire.<br><br>Ils marchent sur ton PC et sur Android.</p>${it("ok","x","Compris")}`, () => {}); return true; }
     if(s==="fade"){ const o = [0,3,6,9,12], v = o[(o.indexOf(LS.get("fade",0))+1) % o.length]; LS.set("fade", v); if(!v) audio.volume = baseVol(); toast(v ? `Fondu enchaîné : ${v} s` : "Fondu enchaîné désactivé"); return settingsSheet(), true; }
     if(s==="norm"){ const v = !LS.get("norm",false); LS.set("norm", v); if(v){ normOn(); toast("Volume égalisé activé"); } else { toast("Désactivé au prochain lancement d'Écho"); } return settingsSheet(), true; }
+    if(s==="amauto"){ LS.set("amAuto", !LS.get("amAuto",true)); toast(LS.get("amAuto",true) ? "Les nouveaux morceaux seront vérifiés sur Apple Music" : "Correction automatique désactivée"); return settingsSheet(), true; }
     if(s==="kb"){ LS.set("kb", !LS.get("kb",true)); $("#full").classList.toggle("kb", LS.get("kb",true)); return settingsSheet(), true; }
     if(s==="kara"){ LS.set("karaoke", !LS.get("karaoke",true)); if($("#full").dataset.mode==="lyrics") showLyrics(); return settingsSheet(), true; }
     if(s==="auto"){ autoplay=!autoplay; LS.set("autoplay",autoplay); toast(autoplay?"Lecture automatique activée":"Lecture automatique désactivée"); }
@@ -4812,7 +4919,7 @@ async function uploadOne(f, prog){
     throw new Error(error.message);
   }
   data.created_at = data.created_at || new Date().toISOString();
-  tracks.unshift(data); byId.set(data.id, data);
+  tracks.unshift(data); byId.set(data.id, data); queueAutoTag(data);
   if(parts > 1) for(let i=0;i<parts;i++) pendingSign.push(`${path}.part${i}`); else pendingSign.push(path);
   if(cover_path && !urls[cover_path]) pendingSign.push(cover_path);
 }
@@ -4821,7 +4928,7 @@ async function uploadOne(f, prog){
 if("serviceWorker" in navigator && (location.protocol==="https:" || location.hostname==="localhost")) navigator.serviceWorker.register("sw.js").catch(()=>{});
 
 /* ============ mises à jour : sur iPhone l'app reste ouverte des jours, on vérifie à chaque retour ============ */
-const ECHO_BUILD = "2026-10-24.13";
+const ECHO_BUILD = "2026-10-24.17";
 let updPending = false, lastUpdCheck = 0;
 async function checkUpdate(){
   if(!navigator.onLine || Date.now() - lastUpdCheck < 60e3) return; lastUpdCheck = Date.now();
