@@ -6,13 +6,10 @@
 <title>Écho</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<script>
-/* barre d'état de l'iPhone : en sombre, l'app passe dessous (le lecteur va jusqu'en haut) ; en clair, elle prend la couleur de la page */
-(function(){ var t = "auto"; try{ t = JSON.parse(localStorage.getItem("echo.appearance")||'"auto"'); }catch(e){}
-  var dark = t==="dark" || (t!=="light" && matchMedia("(prefers-color-scheme: dark)").matches);
-  document.write('<meta name="apple-mobile-web-app-status-bar-style" content="' + (dark ? "black-translucent" : "default") + '">');
-  document.write('<meta name="theme-color" content="' + (dark ? "#000000" : "#ffffff") + '">'); })();
-</script>
+<!-- barre d'état de l'iPhone : l'app passe dessous → le lecteur va jusqu'en haut, comme Apple Music
+     (l'iPhone ne laisse pas un site changer la couleur de cette barre pendant qu'il tourne) -->
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000000">
 <meta name="apple-mobile-web-app-title" content="Écho">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -329,6 +326,9 @@ main#view{max-width:1100px;margin:0 auto;padding:0 16px}
 #queuePanel .row:hover{background:rgba(255,255,255,.06)}
 #queuePanel .row .a{color:rgba(255,255,255,.6)}
 #queuePanel .list .row{padding:6px 0;gap:12px}
+/* derrière l'heure/batterie en mode clair : bande noire (le texte de la barre est blanc) ; le lecteur passe par-dessus */
+#sbar{position:fixed;top:0;left:0;right:0;height:var(--safe-t);background:#000;z-index:59;pointer-events:none}
+:root[data-theme=dark] #sbar{background:var(--bg)}
 #queuePanel .row .handle{color:rgba(255,255,255,.5);margin-right:-6px}
 #queuePanel .row .rm{width:30px;margin-right:-2px}
 /* glisser vers la droite */
@@ -720,7 +720,6 @@ input[type=range]{height:4px}
 .story .sbtns button+button{background:rgba(255,255,255,.18);color:#fff}.story .sbtns svg{width:18px;height:18px}
 @keyframes kb{from{background-size:100%;background-position:50% 50%}to{background-size:116%;background-position:42% 58%}}
 @keyframes kbg{from{transform:scale(1) rotate(0)}to{transform:scale(1.18) rotate(4deg)}}
-.full.kb:not(.is-paused):not(.is-radio) #bigart{animation:kb 22s ease-in-out infinite alternate}
 .full.kb:not(.is-paused) .bgart{animation:kbg 26s ease-in-out infinite alternate}
 @media (prefers-reduced-motion:reduce){.full.kb #bigart,.full.kb .bgart,.story .sbg,.story .sart,.story .scov{animation:none!important}}
 </style>
@@ -821,6 +820,7 @@ input[type=range]{height:4px}
 </div>
 
 <!-- full player -->
+<div id="sbar"></div>
 <div class="full is-paused" id="full" data-mode="art">
   <div class="bgart" id="bgart"></div><div class="shade"></div>
   <div class="fwrap">
@@ -4395,7 +4395,7 @@ async function settingsSheet(){
     ${it("oracle","upload","Stockage Oracle (200 Go gratuits)","","", ORA ? (tracks.some(t=>!isOra(t.path)) ? "À transférer" : "Actif") : "Non configuré")}
     ${CAN_VOL ? it("fade","shuffle","Fondu enchaîné","","", LS.get("fade",0) ? LS.get("fade",0)+" s" : "Désactivé") + it("norm","sparkle","Volume égalisé", LS.get("norm",false)?"on":"", "", LS.get("norm",false)?"Activé":"Désactivé") : it("noios","shuffle","Fondu enchaîné · volume égalisé","","","Pas sur iPhone")}
     ${it("amauto","sparkle","Corriger la bibliothèque avec Apple Music", LS.get("amAuto",true)?"on":"", "", LS.get("amAuto",true) ? (()=>{ const d = tracks.filter(t=>t.tag_status).length; return d >= tracks.length ? "Tout est fait" : `${d.toLocaleString("fr-FR")} / ${tracks.length.toLocaleString("fr-FR")}`; })() : "Désactivé")}
-    ${it("kb","album","Pochettes animées", LS.get("kb",true)?"on":"", "", LS.get("kb",true)?"Activé":"Désactivé")}
+    ${it("kb","album","Fond animé", LS.get("kb",true)?"on":"", "", LS.get("kb",true)?"Activé":"Désactivé")}
     ${it("kara","lyrics","Paroles mot à mot (karaoké)", LS.get("karaoke",true)?"on":"", "", LS.get("karaoke",true)?"Activé":"Désactivé")}
     ${it("auto","infinity","Lecture automatique", autoplay?"on":"", "", autoplay?"Activée":"Désactivée")}
     <div class="sep"></div>
@@ -5066,7 +5066,7 @@ async function uploadOne(f, prog){
 if("serviceWorker" in navigator && (location.protocol==="https:" || location.hostname==="localhost")) navigator.serviceWorker.register("sw.js").catch(()=>{});
 
 /* ============ mises à jour : sur iPhone l'app reste ouverte des jours, on vérifie à chaque retour ============ */
-const ECHO_BUILD = "2026-10-24.22";
+const ECHO_BUILD = "2026-10-24.23";
 let updPending = false, lastUpdCheck = 0;
 async function checkUpdate(){
   if(!navigator.onLine || Date.now() - lastUpdCheck < 60e3) return; lastUpdCheck = Date.now();
