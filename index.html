@@ -511,7 +511,9 @@ img.art{object-fit:cover;display:block}
 .mt .mk b{font-family:var(--fd);font-weight:700;font-size:19px}
 /* récap */
 .recap{border-radius:14px;background:var(--card);border:0}
-.recap .num{background:none;color:var(--a1);-webkit-text-fill-color:var(--a1)}
+.recap .num{background:none;color:var(--a1);-webkit-text-fill-color:var(--a1);flex:none;white-space:nowrap;min-width:0;max-width:42%}
+.recap .num.n4{font-size:34px}.recap .num.n5{font-size:28px}.recap .num.n6{font-size:22px}
+.recap>div:not(.num){flex:1;min-width:0}
 /* fiches & menus */
 .sheet{background:var(--panel);border:0;border-radius:14px 14px 0 0}
 .sheet .it{border-radius:10px;font-size:16px}
@@ -1459,7 +1461,16 @@ const DZ_EMPTY = /\/artist\/\/|images\/artist\/\/|\/artist\/?$/;
 function artUrl(name){
   const o = artOv.get(name);
   if(o){ if(o.image_path && urls[o.image_path]) return urls[o.image_path]; if(o.image_url) return o.image_url; }
-  return LS.get("art2:"+name, null) || null;
+  // 1) photo Apple Music (les mêmes images que dans l'app Musique), 2) sinon Deezer
+  return LS.get("art3:"+name, null) || LS.get("art2:"+name, null) || null;
+}
+// photos Apple Music, demandées par lots de 25 à la fonction « artimg » (cache serveur 30 jours)
+async function appleArtistPhotos(names){
+  try{
+    const r = await fetch(`${cfg.url}/functions/v1/artimg`, { method:"POST", headers:{ "Content-Type":"application/json", apikey:cfg.key, Authorization:"Bearer "+cfg.key }, body: JSON.stringify({ names }) });
+    if(!r.ok) return {};
+    return await r.json();
+  }catch{ return {}; }
 }
 function artistImg(name, cls){
   const a = artists.find(x=>x.name===name);
@@ -1473,8 +1484,8 @@ function refreshArtImg(name){
   document.querySelectorAll(`[data-artimg="${CSS.escape(name)}"]`).forEach(el => {
     // tuile de genre : on refait la grille une fois les photos arrivées (évite deux fois la même photo)
     if(el.dataset.nocover){ clearTimeout(refreshArtImg.t); refreshArtImg.t = setTimeout(() => { if(curR()?.r === "search" && !searchQ.trim()) render(); }, 1200); }
-    if(u){ el.style.backgroundImage = `url('${cssUrl(u)}'),${gradFor(name)}`; el.textContent = ""; }
-    else if(el.dataset.nocover){ el.style.backgroundImage = "none"; }
+    if(el.dataset.nocover){ const ti = tileImg(name); el.style.backgroundImage = ti ? `url('${cssUrl(ti)}')` : "none"; }
+    else if(u){ el.style.backgroundImage = `url('${cssUrl(u)}'),${gradFor(name)}`; el.textContent = ""; }
     else { const a = artists.find(x=>x.name===name); const ct = a?.tracks.find(t=>coverOf(t)); const fl = el.style.filter; el.setAttribute("style", cvStyle(ct, name)); if(fl) el.style.filter = fl; el.textContent = ct ? "" : name.charAt(0).toUpperCase(); }
   });
 }
@@ -1514,15 +1525,25 @@ const artQ = []; let artBusy = 0;
 function loadArtistImages(){
   document.querySelectorAll("[data-artimg]").forEach(el => {
     const n = el.dataset.artimg;
-    if(artOv.get(n)?.image_url || artOv.get(n)?.image_path || LS.get("art2:"+n, null) !== null || n==="Artiste inconnu" || artQ.includes(n)) return; artQ.push(n);
+    if(artOv.get(n)?.image_url || artOv.get(n)?.image_path || LS.get("art3:"+n, null) !== null || n==="Artiste inconnu" || artQ.includes(n)) return; artQ.push(n);
   });
   pumpArt();
 }
 function pumpArt(){
   if(offlineMode) return;
   while(artBusy < 2 && artQ.length){
-    const n = artQ.shift(); artBusy++;
-    findArtistPhoto(n).then(url => { LS.set("art2:"+n, url||""); refreshArtImg(n); }).catch(()=>{}).finally(() => { artBusy--; pumpArt(); });
+    const batch = artQ.splice(0, 25); artBusy++;
+    appleArtistPhotos(batch).then(async res => {
+      for(const n of batch){
+        const u = res[n];
+        if(u){ LS.set("art3:"+n, u); refreshArtImg(n); continue; }
+        if(!(n in res)){ continue; } // serveur injoignable : on réessaiera plus tard
+        LS.set("art3:"+n, "");
+        // pas de photo chez Apple : on garde l'ancienne recherche Deezer
+        if(LS.get("art2:"+n, null) === null){ const d = await findArtistPhoto(n).catch(()=>null); LS.set("art2:"+n, d||""); }
+        refreshArtImg(n);
+      }
+    }).catch(()=>{}).finally(() => { artBusy--; pumpArt(); });
   }
 }
 async function saveArtistPhoto(name, patch){
@@ -1535,7 +1556,7 @@ async function resetArtistPhoto(name){
   const g = artOv.get(name)?.genre;
   if(g){ await sb.from("artist_images").update({ image_url:null, image_path:null }).eq("name", name); artOv.set(name, { ...artOv.get(name), image_url:null, image_path:null }); }
   else { await sb.from("artist_images").delete().eq("name", name); artOv.delete(name); }
-  LS.set("artOv", [...artOv]); LS.set("art2:"+name, null);
+  LS.set("artOv", [...artOv]); LS.set("art2:"+name, null); LS.set("art3:"+name, null);
   try{ localStorage.removeItem("echo.art2:"+name); }catch{}
   refreshArtImg(name); artQ.push(name); pumpArt(); toast("Photo automatique");
 }
@@ -1774,18 +1795,20 @@ function genreTileArtists(genres){
     const m = main.get(a) || new Map(); const k = genreKey(g); m.set(k, (m.get(k)||0) + 1); main.set(a, m);
     const s = score.get(a+"|"+k) || 0; score.set(a+"|"+k, s + 1 + (t.play_count||0)*3 + (t.favorite?2:0)); }
   const primary = a => [...(main.get(a)||new Map()).entries()].sort((x,y)=>y[1]-x[1])[0]?.[0];
-  const noPhoto = a => !artUrl(a) && LS.get("art2:"+a, null) === "";
+  // sur les tuiles : uniquement des photos Apple Music (ou une photo choisie à la main), jamais de pochette ni de logo Deezer
+  const noPhoto = a => !tileImg(a) && LS.get("art3:"+a, null) === "";
   // jamais deux fois le même artiste… ni la même photo (un duo « A & B » a souvent la photo de A)
   const used = new Set(), usedImg = new Set(), out = new Map();
   for(const g of genres){
     const k = genreKey(g);
-    const cands = [...main.keys()].filter(a => main.get(a).has(k) && !used.has(norm(a)) && !noPhoto(a) && !(artUrl(a) && usedImg.has(artUrl(a))))
-      .sort((x,y) => (primary(y)===k) - (primary(x)===k) || (artUrl(y)?1:0) - (artUrl(x)?1:0) || score.get(y+"|"+k) - score.get(x+"|"+k));
+    const cands = [...main.keys()].filter(a => main.get(a).has(k) && !used.has(norm(a)) && !noPhoto(a) && !(tileImg(a) && usedImg.has(tileImg(a))))
+      .sort((x,y) => (tileImg(y)?1:0) - (tileImg(x)?1:0) || (primary(y)===k) - (primary(x)===k) || score.get(y+"|"+k) - score.get(x+"|"+k));
     const a = cands[0];
-    if(a){ used.add(norm(a)); splitArtists(a).forEach(x => used.add(norm(x))); if(artUrl(a)) usedImg.add(artUrl(a)); out.set(g, a); }
+    if(a){ used.add(norm(a)); splitArtists(a).forEach(x => used.add(norm(x))); if(tileImg(a)) usedImg.add(tileImg(a)); out.set(g, a); }
   }
   return out;
 }
+const tileImg = a => { const o = artOv.get(a); if(o?.image_path && urls[o.image_path]) return urls[o.image_path]; return o?.image_url || LS.get("art3:"+a, null) || null; };
 const sameGenre = (a, b) => !!a && !!b && genreKey(a) === genreKey(b);
 const genreColor = g => { const k = genreKey(g); if(GENRE_COLOR[k]) return GENRE_COLOR[k]; const pal = Object.values(GENRE_COLOR); let h = 0; for(const c of k) h = (h*31 + c.charCodeAt(0)) >>> 0; return pal[h % pal.length]; };
 // artiste « tête d'affiche » d'une liste ; `used` évite de remettre la même photo sur deux cartes voisines
@@ -1879,7 +1902,8 @@ function vHome(){
   // 2) récap de la semaine
   const wk = getMix("week");
   if(wk.tracks.length){ const ta = [...new Set(wk.tracks.map(aArtist))].slice(0,3).join(", ");
-    h += `<button class="recap" data-go="recap"><div class="num">${wk.tracks.length}</div><div><b>Ton récap</b><span>son${wk.tracks.length>1?"s":""} ajouté${wk.tracks.length>1?"s":""} cette semaine · ${esc(ta)} · temps d'écoute, tops…</span></div>${ICON.chevron.replace("<svg",'<svg style="width:18px;height:18px;margin-left:auto;color:var(--mute)"')}</button>`; }
+    const nTxt = wk.tracks.length.toLocaleString("fr-FR"), nD = String(wk.tracks.length).length, nCls = nD >= 6 ? "n6" : nD >= 5 ? "n5" : nD >= 4 ? "n4" : "";
+    h += `<button class="recap" data-go="recap"><div class="num ${nCls}">${nTxt}</div><div><b>Ton récap</b><span>son${wk.tracks.length>1?"s":""} ajouté${wk.tracks.length>1?"s":""} cette semaine · ${esc(ta)} · temps d'écoute, tops…</span></div>${ICON.chevron.replace("<svg",'<svg style="width:18px;height:18px;margin-left:auto;color:var(--mute)"')}</button>`; }
   // 3) écoutés récemment
   const hist = SMART.history.get().slice(0,15);
   if(hist.length){ const key = reg("hist", hist); h += shelf("Écoutés récemment", hist.map(t=>`<button class="tile" data-tile="${t.id}" data-list="${key}">${cv(t)}<div class="t">${esc(t.title)}</div><div class="a">${esc(t.artist||"")}</div></button>`).join(""), "smart:history"); }
@@ -2069,7 +2093,7 @@ function searchResults(){
     const tileArt = genreTileArtists(genres);
     let h = "";
     if(rec.length) h += `<div class="sec"><h3>Recherches récentes</h3><button data-act="clear-recent">Effacer</button></div>${rec.map(r=>`<button class="recent-q" data-act="re-search" data-arg="${esc(r)}">${ICON.clock}${esc(r)}</button>`).join("")}`;
-    if(genres.length) h += `<div class="sec"><h3>Parcourir par genre</h3></div><div class="genres">${genres.map(g=>{ const a = tileArt.get(g), u = a && artUrl(a);
+    if(genres.length) h += `<div class="sec"><h3>Parcourir par genre</h3></div><div class="genres">${genres.map(g=>{ const a = tileArt.get(g), u = a && tileImg(a);
       const col = genreColor(g);
       return `<button class="genre" data-go="genre:${esc(g)}" style="--gc:${col}">${a?`<div class="cv gimg" data-artimg="${esc(a)}" data-nocover="1" style="${u?`background-image:url('${cssUrl(u)}')`:"background-image:none"};filter:url(#${duoFilter(col)})"></div>`:""}<span>${esc(g)}</span></button>`; }).join("")}</div>`;
     if(!h) h = `<div class="empty"><p>Cherche dans ta bibliothèque, y compris dans les paroles.</p></div>`;
@@ -2167,7 +2191,7 @@ function action(a, arg, el){
     case "q-shuffle": return toggleShuffle();
     case "q-repeat": repeat=(repeat+1)%3; updModes(); return renderQueue();
     case "q-auto": autoplay=!autoplay; LS.set("autoplay",autoplay); updModes(); return renderQueue();
-    case "q-clear": queue.splice(qi+1); baseList = [...queue]; saveState(); return renderQueue();
+    case "q-clear": queue.splice(qi+1); baseList = [...queue]; userQ.clear(); saveState(); return renderQueue();
     case "q-rm": { const i = +arg; queue.splice(i,1); if(i<qi) qi--; saveState(); return renderQueue(); }
   }
 }
@@ -2267,12 +2291,13 @@ function collSheet(r){
 
 /* ============ queue ============ */
 function enqueueNext(l){
-  if(!queue.length) return playFrom(l, l[0].id, false);
+  if(!queue.length || radioMode) return playFromNow(l, l[0].id, false);
+  l.forEach(t => userQ.add(t.id));
   const ids = new Set(l.map(t=>t.id)); const cur = queue[qi];
   queue = queue.filter((x,i)=>i<=qi || !ids.has(x.id)); qi = queue.indexOf(cur);
   queue.splice(qi+1, 0, ...l.filter(x=>x!==cur)); saveState(); renderQueue();
 }
-function enqueueLast(l){ if(!queue.length) return playFrom(l, l[0].id, false); queue.push(...l); saveState(); renderQueue(); }
+function enqueueLast(l){ if(!queue.length || radioMode) return playFromNow(l, l[0].id, false); l.forEach(t => userQ.add(t.id)); queue.push(...l); saveState(); renderQueue(); }
 function jumpQueue(i){ if(i>=0 && i<queue.length){ qi = i; load(true); } }
 
 /* ============ favorites / edit / delete ============ */
@@ -2580,7 +2605,19 @@ async function offlineSrc(t){
 /* ============ playback ============ */
 let objUrl = null, counted = false, startedFor = null, restorePos = 0;
 let playCtx = null;
+// morceaux ajoutés à la main (« Lire ensuite » / « Plus tard ») : comme Apple Music, on demande avant de les effacer
+let userQ = new Set();
 function playFrom(list, id, keepShuffle=true){
+  const pending = radioMode ? [] : queue.slice(qi+1).filter(t => userQ.has(t.id) && t.id !== id);
+  if(!pending.length) return playFromNow(list, id, keepShuffle);
+  sheet(`<h3>Effacer la file d'attente ?</h3><p class="note">Tu as ajouté ${nMorceaux(pending.length)} à « À suivre ». Si tu la conserves, ils seront joués juste après ce morceau.</p>
+    ${it("clear","trash","Effacer la file d'attente","danger")}${it("keep","queue","Conserver la file d'attente")}`,
+  k => {
+    if(k === "clear"){ userQ.clear(); playFromNow(list, id, keepShuffle); }
+    if(k === "keep"){ playFromNow(list, id, keepShuffle); const ids = new Set(pending.map(t=>t.id)); const cur = queue[qi]; queue = queue.filter((t,i) => i <= qi || !ids.has(t.id)); qi = queue.indexOf(cur); queue.splice(qi+1, 0, ...pending); saveState(); renderQueue(); }
+  });
+}
+function playFromNow(list, id, keepShuffle=true){
   playCtx = curR()?.r || null;
   baseList = [...list];
   if(!keepShuffle) { shuffle = false; updModes(); }
@@ -2595,6 +2632,8 @@ function toggleShuffle(){
 }
 async function load(autoplay, metaOnly){
   const t = queue[qi]; if(!t) return;
+  userQ.delete(t.id);
+  if(!metaOnly) setTimeout(() => connTrack(true), 0); // les autres appareils voient tout de suite le nouveau morceau
   if(!metaOnly){
     counted = false; startedFor = null;
     if(objUrl){ URL.revokeObjectURL(objUrl); objUrl = null; }
@@ -2603,7 +2642,12 @@ async function load(autoplay, metaOnly){
     if(local){ src = objUrl = local; }
     else if(offlineMode || !navigator.onLine){ toast("Pas encore téléchargé sur cet appareil"); return next(true, true); }
     if(!src) {
-      if(!urls[(t.parts||1) > 1 ? partPath(t,0) : t.path] || Date.now()-urlsAt > 10*3600e3) await signAll(true);
+      // on ne signe que ce morceau (signer toute la bibliothèque prenait plusieurs secondes avant chaque lecture)
+      if(!urls[(t.parts||1) > 1 ? partPath(t,0) : t.path] || Date.now()-urlsAt > 10*3600e3){
+        const ps = (t.parts||1) > 1 ? Array.from({length:t.parts},(_,i)=>partPath(t,i)) : [t.path];
+        Object.assign(urls, await signPaths(ps));
+        if(Date.now()-urlsAt > 10*3600e3) setTimeout(() => signAll(true), 5000);
+      }
       if((t.parts||1) > 1){
         let shown = -1; const tid = t.id;
         try{ src = await partsBlobUrl(t, p => { const v = Math.floor(p*10); if(v !== shown){ shown = v; toast(`Chargement du morceau… ${v*10} %`); } }); }
@@ -3079,7 +3123,13 @@ document.addEventListener("click", e => {
 }, true);
 function playRadio(st, list){
   savePlay(); radioMode = st; radioList = list || [st];
-  audio.src = st.url; audio.play().catch(()=>toast("Radio indisponible pour le moment"));
+  // la radio remplace la musique : la file d'attente des morceaux est vidée (comme sur Apple Music)
+  queue = []; qi = 0; baseList = []; userQ.clear(); saveState(); renderQueue();
+  // adresse unique à chaque lancement : le navigateur ne peut pas resservir un vieux bout de flux (pub qui recommence…) → vrai direct
+  const live = st.url + (st.url.includes("?") ? "&" : "?") + "echo=" + Date.now();
+  audio.pause(); audio.removeAttribute("src"); audio.load();
+  audio.preload = "auto"; audio.src = live; audio.play().catch(()=>toast("Radio indisponible pour le moment"));
+  radioMeta = null; startRadioMeta(st); setTimeout(() => connTrack(true), 0);
   startPlay({ radio:st.name, source:"radio" });
   $("#full").classList.add("is-radio"); $("#mini").classList.remove("hidden");
   $("#miniT").textContent = $("#fT").textContent = $("#fmT").textContent = st.name;
@@ -3092,7 +3142,58 @@ function playRadio(st, list){
   fetch(RB[0] + "/json/url/" + st.uuid).catch(()=>{});
   if(curR().r==="radio" || curR().r.startsWith("rsearch")) render();
 }
-function stopRadioMode(){ if(!radioMode) return; radioMode = null; $("#full").classList.remove("is-radio"); }
+function stopRadioMode(){ if(!radioMode) return; radioMode = null; radioMeta = null; clearTimeout(radioMetaT); $("#full").classList.remove("is-radio"); }
+/* ---- radio : titre en cours (artiste — titre) ----
+   1) Radio France : API publique livemeta ; 2) serveurs Icecast : status-json.xsl ; 3) métadonnées ICY dans le flux.
+   Si la radio ne donne rien, on affiche « En direct ». */
+let radioMeta = null, radioMetaT = 0;
+const RF_LIVEMETA = { "France Inter":1, "franceinfo":4, "France Culture":5, "France Musique":4, "Mouv'":6, "FIP":7 };
+async function radioNowPlaying(st){
+  const tidy = s => String(s||"").replace(/\s+/g," ").trim();
+  if(RF_LIVEMETA[st.name] != null){
+    try{
+      const j = await (await fetch(`https://api.radiofrance.fr/livemeta/pull/${RF_LIVEMETA[st.name]}`, { cache:"no-store" })).json();
+      const lv = j.levels?.[0]; const s = lv && j.steps?.[lv.items?.[lv.position]];
+      if(s){ const who = tidy(s.authors || s.performers || s.composers || ""), what = tidy(s.title || s.titreEmission || ""); if(what) return who ? `${who} — ${what}` : what; }
+    }catch{}
+  }
+  let u; try{ u = new URL(st.url); }catch{ return null; }
+  try{
+    const r = await fetch(u.origin + "/status-json.xsl", { cache:"no-store" });
+    if(r.ok){ const j = await r.json(); let src = j.icestats?.source; src = Array.isArray(src) ? src : src ? [src] : [];
+      const m = src.find(x => x.listenurl && new URL(x.listenurl).pathname === u.pathname) || (src.length === 1 ? src[0] : null);
+      const t = tidy(m?.title || (m?.artist ? `${m.artist} - ${m.title||""}` : "")); if(t) return t.replace(/\s+-\s+/, " — "); }
+  }catch{}
+  try{ // métadonnées ICY : un bloc texte glissé dans le flux toutes les « icy-metaint » octets
+    const ctl = new AbortController(); setTimeout(() => ctl.abort(), 8000);
+    const r = await fetch(st.url, { headers:{ "Icy-MetaData":"1" }, signal:ctl.signal, cache:"no-store" });
+    const every = +r.headers.get("icy-metaint"); if(!every || !r.body){ ctl.abort(); return null; }
+    const rd = r.body.getReader(); let buf = new Uint8Array(0);
+    while(buf.length < every + 4081){ const { done, value } = await rd.read(); if(done) break; const n = new Uint8Array(buf.length + value.length); n.set(buf); n.set(value, buf.length); buf = n; }
+    ctl.abort();
+    const len = buf[every] * 16; if(!len) return null;
+    const txt = new TextDecoder().decode(buf.slice(every + 1, every + 1 + len)); const m = /StreamTitle='([^']*)'/.exec(txt);
+    const t = tidy(m?.[1]); return t ? t.replace(/\s+-\s+/, " — ") : null;
+  }catch{ return null; }
+}
+function startRadioMeta(st){
+  clearTimeout(radioMetaT);
+  const tick = async () => {
+    if(radioMode?.uuid !== st.uuid) return;
+    if(!document.hidden || !audio.paused){
+      const t = await radioNowPlaying(st);
+      if(radioMode?.uuid !== st.uuid) return;
+      if(t !== radioMeta){ radioMeta = t; showRadioMeta(st); connTrack(true); }
+    }
+    radioMetaT = setTimeout(tick, 20000);
+  };
+  tick();
+}
+function showRadioMeta(st){
+  const line = radioMeta || ("En direct" + (st.tags ? " · " + st.tags : ""));
+  $("#miniA").textContent = $("#fA").textContent = $("#fmA").textContent = line;
+  if("mediaSession" in navigator){ const art = navigator.mediaSession.metadata?.artwork || []; navigator.mediaSession.metadata = new MediaMetadata({ title: radioMeta ? radioMeta.split(" — ").slice(1).join(" — ") || radioMeta : st.name, artist: radioMeta ? `${radioMeta.split(" — ")[0]} · ${st.name}` : "En direct", album: st.name, artwork: art }); }
+}
 function stepRadio(d){ if(!radioMode) return false; const i = radioList.findIndex(x=>x.uuid===radioMode.uuid); const n = radioList[(i + d + radioList.length) % radioList.length]; if(n) playRadio(n, radioList); return true; }
 async function toggleRadioFav(uuid){
   const all = Object.values(radioCache).flat(); const st = all.find(x=>x.uuid===uuid) || radioFavs.find(x=>x.uuid===uuid); if(!st) return;
@@ -4053,6 +4154,7 @@ function connStart(){
     // état en direct (morceau, lecture/pause, position, volume) : envoyé à chaque changement et toutes les 8 s
     ch.on("broadcast", { event:"state" }, ({ payload }) => { if(!payload?.from || payload.from === TAB_ID) return; peers[payload.from] = { ...(peers[payload.from]||{}), ...payload, seen: Date.now(), left: 0 }; connRefresh(); });
     ch.on("broadcast", { event:"cmd" }, ({ payload }) => { if(payload?.to === TAB_ID) onConnCmd(payload); });
+    ch.on("broadcast", { event:"ack" }, ({ payload }) => { if(payload?.to === TAB_ID && connWait.has(payload.mid)){ clearTimeout(connWait.get(payload.mid)); connWait.delete(payload.mid); } });
     ch.on("broadcast", { event:"hello" }, ({ payload }) => { if(payload?.from !== TAB_ID) connTrack(true); });
     ch.subscribe(st => {
       if(st === "SUBSCRIBED"){ connTrack(true); connHello(); }
@@ -4070,7 +4172,7 @@ addEventListener("online", connWake); addEventListener("focus", connWake); addEv
 function connState(){
   const t = queue[qi];
   return { from:TAB_ID, dev:DEV_ID, name:devName(), who:PROFILE?.name||"", emoji:PROFILE?.emoji||"", color:PROFILE?.color||"",
-    t: radioMode ? { title:radioMode.name, artist:"Radio" } : t ? { id:t.id, title:t.title, artist:t.artist||"", album:t.album||"", dur:audio.duration||t.duration||0 } : null,
+    t: radioMode ? { title:radioMode.name, artist: radioMeta || "Radio en direct", radio:{ uuid:radioMode.uuid, name:radioMode.name, url:radioMode.url, favicon:radioMode.favicon||"", tags:radioMode.tags||"", site:radioMode.site||"" } } : t ? { id:t.id, title:t.title, artist:t.artist||"", album:t.album||"", dur:audio.duration||t.duration||0 } : null,
     playing: !audio.paused, pos: audio.currentTime||0, at: Date.now(), vol: baseVol(), canVol: CAN_VOL, mobile: !IS_DESKTOP };
 }
 function connTrack(now){
@@ -4091,8 +4193,20 @@ function updConnBadge(){
   b.classList.toggle("remote", !!other && audio.paused);
   b.title = other && audio.paused ? `En lecture sur ${other.name}` : "Appareils";
 }
-const connSend = (to, op, extra = {}) => conn?.send({ type:"broadcast", event:"cmd", payload:{ to, from:TAB_ID, op, ...extra } });
+// commandes avec accusé de réception : renvoyées une fois si l'autre appareil ne répond pas, sinon on prévient
+const connWait = new Map();
+function connSend(to, op, extra = {}){
+  const mid = Math.random().toString(36).slice(2);
+  const fire = () => { try{ conn?.send({ type:"broadcast", event:"cmd", payload:{ to, from:TAB_ID, op, mid, ...extra } }); }catch{} };
+  if(!conn){ connWake(); setTimeout(fire, 1500); } else fire();
+  connWait.set(mid, setTimeout(() => {
+    connWake(); setTimeout(fire, 800);
+    connWait.set(mid, setTimeout(() => { connWait.delete(mid); toast(`${peers[to]?.name || "L'appareil"} ne répond pas — ouvre Écho dessus (écran allumé)`); }, 3500));
+  }, 2500));
+}
+function connAck(m){ try{ conn?.send({ type:"broadcast", event:"ack", payload:{ to:m.from, mid:m.mid } }); }catch{} }
 function onConnCmd(m){
+  if(m.mid){ if(onConnCmd.seen?.has(m.mid)) return; (onConnCmd.seen ||= new Set()).add(m.mid); connAck(m); }
   if(m.op === "toggle") return toggle();
   if(m.op === "next") return next(true);
   if(m.op === "prev") return prev();
@@ -4100,7 +4214,9 @@ function onConnCmd(m){
   if(m.op === "vol"){ const v = Math.max(0, Math.min(1, +m.v)); LS.set("vol", Math.round(v*100)); audio.volume = v; const r = $("#vol"); if(r){ r.value = Math.round(v*100); r.style.setProperty("--p", r.value+"%"); } connTrack(true); return; }
   if(m.op === "pause"){ audio.pause(); return; }
   if(m.op === "play"){ // une autre appareil m'envoie sa lecture
+    if(m.radio){ playRadio(m.radio, [m.radio]); setTimeout(() => { if(audio.paused) tapToPlay(m.name); }, 1500); toast(`Radio reprise depuis ${m.name||"un autre appareil"}`); return; }
     const list = (m.ids||[]).map(id => byId.get(id)).filter(Boolean); if(!list.length) return;
+    if(radioMode) stopRadioMode();
     baseList = [...list]; queue = [...list]; qi = Math.max(0, list.findIndex(t => t.id === m.cur));
     // la position envoyée + le temps écoulé pendant le transfert
     restorePos = (m.pos || 0) + (m.at ? Math.min(10, Math.max(0, (Date.now() - m.at) / 1000)) : 0);
@@ -4108,10 +4224,15 @@ function onConnCmd(m){
     toast(`Lecture reprise depuis ${m.name||"un autre appareil"}`); return;
   }
   if(m.op === "pull"){ // un autre appareil veut reprendre ma lecture
-    const t = queue[qi]; if(!t) return;
-    connSend(m.from, "play", { ids: queue.slice(Math.max(0, qi-50), qi+200).map(x => x.id), cur:t.id, pos:audio.currentTime, at:Date.now(), playing:!audio.paused, name:devName() });
-    audio.pause(); toast("Lecture transférée");
+    const p = playPayload(); if(!p) return;
+    connSend(m.from, "play", p); audio.pause(); toast("Lecture transférée");
   }
+}
+// ce que j'écoute, pour l'envoyer à un autre appareil (morceaux + position, ou la radio)
+function playPayload(){
+  if(radioMode) return { radio:{ uuid:radioMode.uuid, name:radioMode.name, url:radioMode.url, favicon:radioMode.favicon||"", tags:radioMode.tags||"", site:radioMode.site||"" }, playing:!audio.paused, name:devName() };
+  const t = queue[qi]; if(!t) return null;
+  return { ids: queue.slice(Math.max(0, qi-50), qi+200).map(x => x.id), cur:t.id, pos:audio.currentTime, at:Date.now(), playing:!audio.paused, name:devName() };
 }
 // iPhone : un site ne peut lancer le son qu'après un geste. On « déverrouille » le lecteur au premier toucher,
 // et si ça bloque quand même, un gros bouton propose de lancer la lecture.
@@ -4136,7 +4257,9 @@ function connectSheet(refresh){
   for(const [k, v] of Object.entries(peers)) if(Date.now() - (v.seen || v.at || 0) > 300e3) delete peers[k];
   const list = Object.entries(peers).sort((a,b) => (peerAlive(b[1])?1:0)-(peerAlive(a[1])?1:0) || (b[1].playing?1:0)-(a[1].playing?1:0) || (b[1].t?1:0)-(a[1].t?1:0));
   const label = v => esc(v.name) + (v.dev === DEV_ID ? ` <small>(autre fenêtre)</small>` : "");
-  const thumb = (v, cls) => { const t = v?.t?.id && byId.get(v.t.id); return t ? cv(t, cls||"") : `<div class="cv ${cls||""}" style="background-image:${gradFor(v?.t?.title||v?.name||"?")}">${devIcon(v?.name||"")}</div>`; };
+  const thumb = (v, cls) => { const t = v?.t?.id && byId.get(v.t.id);
+    if(!t && v?.t?.radio){ const u = LOGO[v.t.radio.name] || logoOK.get(v.t.radio.uuid) || v.t.radio.favicon; if(u) return `<div class="cv ${cls||""}" style="background:#fff url('${cssUrl(u)}') center/70% no-repeat"></div>`; }
+    return t ? cv(t, cls||"") : `<div class="cv ${cls||""}" style="background-image:${gradFor(v?.t?.title||v?.name||"?")}">${devIcon(v?.name||"")}</div>`; };
   const eq = `<span class="cxEq"><i></i><i></i><i></i></span>`;
   const p = connSel && peers[connSel];
   let html;
@@ -4150,7 +4273,7 @@ function connectSheet(refresh){
       ${dur ? `<div class="cxSeek"><input type="range" min="0" max="${Math.round(dur*10)}" value="${Math.round(pos*10)}" data-k="seek" style="--p:${(pos/dur*100).toFixed(2)}%" aria-label="Position"><div class="cxTimes"><span id="cxCur">${fmt(pos)}</span><span>-${fmt(Math.max(0, dur-pos))}</span></div></div>` : ""}
       <div class="cxCtl"><button data-s="c-prev" aria-label="Précédent">${ICON.prev}</button><button data-s="c-toggle" class="pp" aria-label="${p.playing?"Pause":"Lecture"}">${p.playing?ICON.pause:ICON.play}</button><button data-s="c-next" aria-label="Suivant">${ICON.next}</button></div>
       ${p.canVol ? `<div class="cxVol"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 9h3l5-4v14l-5-4H4z"/></svg><input type="range" min="0" max="100" value="${Math.round((p.vol??1)*100)}" data-k="vol" style="--p:${Math.round((p.vol??1)*100)}%" aria-label="Volume"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9h3l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12"/></svg></div>` : `<p class="cxHint">Volume : à régler sur ${esc(p.name)} (l'iPhone ne laisse pas les sites changer le volume)</p>`}
-      <div class="cxActs">${p.t?.id ? `<button data-s="c-pull">${ICON.down}<span>Écouter ici</span></button>` : ""}${queue[qi] ? `<button data-s="c-push">${ICON.upload}<span>Envoyer ma musique</span></button>` : ""}</div>
+      <div class="cxActs">${p.t?.id || p.t?.radio ? `<button data-s="c-pull">${ICON.down}<span>Écouter ici</span></button>` : ""}${queue[qi] || radioMode ? `<button data-s="c-push">${ICON.upload}<span>Envoyer ${radioMode ? "ma radio" : "ma musique"}</span></button>` : ""}</div>
     </div>`;
   } else {
     const me = queue[qi];
@@ -4177,7 +4300,7 @@ function connectSheet(refresh){
     if(k==="c-next"){ connSend(connSel, "next"); return true; }
     if(k==="c-prev"){ connSend(connSel, "prev"); return true; }
     if(k==="c-pull"){ connSend(connSel, "pull"); toast("Transfert…"); return; }
-    if(k==="c-push"){ const t = queue[qi]; connSend(connSel, "play", { ids: queue.slice(Math.max(0, qi-50), qi+200).map(x => x.id), cur:t.id, pos:audio.currentTime, at:Date.now(), playing:!audio.paused, name:devName() }); audio.pause(); toast(`Lecture envoyée vers ${p.name}`); return; }
+    if(k==="c-push"){ const pl = playPayload(); if(!pl) return true; connSend(connSel, "play", pl); audio.pause(); toast(`Lecture envoyée vers ${p.name}`); return; }
     return true;
   };
   const open = document.querySelector(".sheet .connS");
@@ -4623,7 +4746,7 @@ async function uploadOne(f, prog){
 if("serviceWorker" in navigator && (location.protocol==="https:" || location.hostname==="localhost")) navigator.serviceWorker.register("sw.js").catch(()=>{});
 
 /* ============ mises à jour : sur iPhone l'app reste ouverte des jours, on vérifie à chaque retour ============ */
-const ECHO_BUILD = "2026-10-24.8";
+const ECHO_BUILD = "2026-10-24.10";
 let updPending = false, lastUpdCheck = 0;
 async function checkUpdate(){
   if(!navigator.onLine || Date.now() - lastUpdCheck < 60e3) return; lastUpdCheck = Date.now();
