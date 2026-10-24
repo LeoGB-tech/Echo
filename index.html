@@ -3363,7 +3363,7 @@ async function radioNowPlaying(st){
   let u; try{ u = new URL(st.url); }catch{ return null; }
   // le serveur lit le titre glissé dans le flux (marche pour presque toutes les radios, contrairement au navigateur)
   try{
-    const r = await within(fetch(`${cfg.url}/functions/v1/radiometa`, { method:"POST", headers:{ "Content-Type":"application/json", apikey:cfg.key, Authorization:"Bearer "+cfg.key }, body: JSON.stringify({ url: st.url }) }), 12000);
+    const r = await within(fetch(`${cfg.url}/functions/v1/radiometa`, { method:"POST", headers:{ "Content-Type":"application/json", apikey:cfg.key, Authorization:"Bearer "+cfg.key }, body: JSON.stringify({ url: st.url, name: st.name }) }), 15000);
     if(r.ok){ const j = await r.json(); if(j.title && !/^(pub|publicit|advert|jingle)/i.test(j.title) && norm(j.title) !== norm(st.name)) return j.title; }
   }catch{}
   try{
@@ -5090,7 +5090,7 @@ async function uploadOne(f, prog){
 if("serviceWorker" in navigator && (location.protocol==="https:" || location.hostname==="localhost")) navigator.serviceWorker.register("sw.js").catch(()=>{});
 
 /* ============ mises à jour : sur iPhone l'app reste ouverte des jours, on vérifie à chaque retour ============ */
-const ECHO_BUILD = "2026-10-24.26";
+const ECHO_BUILD = "2026-10-24.27";
 let updPending = false, lastUpdCheck = 0;
 async function checkUpdate(){
   if(!navigator.onLine || Date.now() - lastUpdCheck < 60e3) return; lastUpdCheck = Date.now();
