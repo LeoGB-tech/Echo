@@ -3744,7 +3744,8 @@ async function bgTagLoop(){
     for(;;){
       if(LS.get("amAuto", true) === false || offlineMode || !navigator.onLine){ await new Promise(r => setTimeout(r, 60000)); continue; }
       if(amState.on || upActive){ await new Promise(r => setTimeout(r, 30000)); continue; }
-      const todo = tracks.filter(t => !t.tag_status).slice(0, 120);
+      // le serveur avance de A à Z ; le PC part de Z vers A pour ne pas faire le même travail
+      const todo = tracks.filter(t => !t.tag_status).sort((a,b) => String(b.album_artist||b.artist||"").localeCompare(String(a.album_artist||a.artist||""))).slice(0, 120);
       if(!todo.length) break;
       await amRunAll(todo, true);
       await new Promise(r => setTimeout(r, 2000));
@@ -4947,7 +4948,7 @@ async function uploadOne(f, prog){
 if("serviceWorker" in navigator && (location.protocol==="https:" || location.hostname==="localhost")) navigator.serviceWorker.register("sw.js").catch(()=>{});
 
 /* ============ mises à jour : sur iPhone l'app reste ouverte des jours, on vérifie à chaque retour ============ */
-const ECHO_BUILD = "2026-10-24.18";
+const ECHO_BUILD = "2026-10-24.19";
 let updPending = false, lastUpdCheck = 0;
 async function checkUpdate(){
   if(!navigator.onLine || Date.now() - lastUpdCheck < 60e3) return; lastUpdCheck = Date.now();
