@@ -2,7 +2,7 @@
 // - le site et ses bibliothèques sont gardés en cache ;
 // - pochettes, photos d'artistes et logos radio sont gardés dès qu'ils ont été vus (ou préchargés) ;
 // - les morceaux téléchargés sont dans le cache "echo-offline" (géré par la page).
-const SHELL = "echo-shell-v17", IMG = "echo-img-v1";
+const SHELL = "echo-shell-v18", IMG = "echo-img-v1";
 const FILES = ["./", "./index.html", "./manifest.webmanifest", "./icon.svg", "./icon-180.png", "./icon-192.png", "./icon-512.png"];
 const CDN = /^(https:\/\/(cdn\.jsdelivr\.net|cdnjs\.cloudflare\.com|fonts\.googleapis\.com|fonts\.gstatic\.com))\//;
 const IMG_HOSTS = /(^|\.)(dzcdn\.net|deezer\.com|wikimedia\.org|duckduckgo\.com|mzstatic\.com)$/;
