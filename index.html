@@ -62,6 +62,9 @@ svg{display:block}
   background:radial-gradient(40% 35% at 20% 10%,var(--amb1),transparent 70%),
              radial-gradient(35% 30% at 85% 25%,var(--amb2),transparent 70%),
              radial-gradient(45% 40% at 60% 100%,var(--amb3),transparent 70%);filter:blur(10px)}
+/* fond uni comme Apple Music : plus de halo flou derrière les boutons du haut */
+.ambient{display:none!important}
+.full,.full .fhead .t,.full .fmini .t{color:#fff}
 
 /* ---------- auth / setup ---------- */
 .center{min-height:100vh;display:grid;place-items:center;padding:24px 16px calc(24px + var(--safe-b))}
@@ -235,6 +238,7 @@ main#view{max-width:1100px;margin:0 auto;padding:0 16px}
 .genre::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0) 62%,rgba(0,0,0,.22));z-index:0}
 .genre span{position:relative;z-index:1;text-shadow:0 1px 4px rgba(0,0,0,.25)}
 .genre:hover .gimg{transform:scale(1.04);transition:transform .4s}
+.genre.am{background-color:var(--gc)!important;background-size:cover!important;background-position:center!important}.genre.am::after{background:linear-gradient(180deg,rgba(0,0,0,0) 70%,rgba(0,0,0,.18))}
 .recent-q{display:flex;align-items:center;gap:10px;padding:11px 4px;border-bottom:1px solid var(--line);width:100%;text-align:left;color:var(--a1)}
 .recent-q svg{width:16px;height:16px;color:var(--mute)}
 
@@ -301,10 +305,13 @@ main#view{max-width:1100px;margin:0 auto;padding:0 16px}
 #lyrics.plain p{color:rgba(255,255,255,.85);font-size:22px;cursor:default}
 #lyrics .msg{color:rgba(255,255,255,.55);font-size:16px;text-align:center;padding-top:30%}
 #queuePanel{padding:6px 0 20px}
-.qtools{display:flex;gap:8px;margin-bottom:14px}
-.qtools button{flex:1;height:38px;border-radius:12px;background:rgba(255,255,255,.1);display:grid;place-items:center;color:rgba(255,255,255,.75)}
-.qtools button svg{width:19px;height:19px}
-.qtools button.on{background:rgba(255,255,255,.85);color:#111}
+.qtools{display:flex;gap:10px;margin:6px 0 18px}
+.qtools button{flex:1;height:44px;border-radius:999px;background:rgba(255,255,255,.12);display:grid;place-items:center;color:rgba(255,255,255,.85)}
+.qtools button svg{width:21px;height:21px}
+.qtools button.on{background:rgba(255,255,255,.55);color:rgba(0,0,0,.75)}
+.qadd{display:flex;align-items:center;gap:14px;width:100%;padding:8px 0;color:#fff;font-size:16px;text-align:left}
+.qadd span{width:48px;height:48px;border-radius:6px;background:rgba(255,255,255,.12);display:grid;place-items:center;flex:none}.qadd svg{width:22px;height:22px}
+.qfoot{display:flex;align-items:center;justify-content:center;gap:6px;color:rgba(255,255,255,.5);font-size:15px;padding:18px 0 30px;text-align:center}.qfoot svg{width:18px;height:18px}
 .qhead{display:flex;justify-content:space-between;align-items:baseline;margin:6px 0 6px}
 .qhead b{font-size:17px}
 .qhead button{font-size:14px;color:rgba(255,255,255,.65);font-weight:600}
@@ -1807,6 +1814,20 @@ const GENRE_ALIAS = { electro:"electronique", electronic:"electronique", electro
 const GENRE_NAME = { electronique:"Électronique", rap:"Hip-hop/Rap", bandeoriginale:"Bande originale", rbsoul:"R&B/Soul", variete:"Variété française", alternatif:"Alternatif", latin:"Latino", classique:"Classique" };
 const GENRE_COLOR = { pop:"#e8578a", rap:"#5b7cf0", rock:"#ee5d36", metal:"#3a3a40", dance:"#2fb67c", electronique:"#7b5cf0", techno:"#168f8a", house:"#18a7c9", country:"#e3922b",
   rbsoul:"#9a63e8", variete:"#e63950", bandeoriginale:"#d9a21f", alternatif:"#e0573f", latin:"#f04a8c", jazz:"#2d6fd1", classique:"#b8892c", reggae:"#2f9e4f", blues:"#3d5fb8", kpop:"#f25c9a", afro:"#e07a22", funk:"#d6408f", folk:"#8a9a3b" };
+/* ---- tuiles officielles d'Apple Music (« Parcourir par catégorie ») : mêmes images, mêmes couleurs ---- */
+const AM_FOR = { rap:["Rap francophone","Rap"], pop:["Pop"], variete:["Pop française"], rock:["Rock"], metal:["Metal"], hardrock:["Hard rock"],
+  dance:["Dance"], electronique:["Électronique"], house:["DJ Mixes"], techno:["DJ Mixes"], rbsoul:["R&B","Soul/Funk"], funk:["Soul/Funk"], soul:["Soul/Funk"],
+  reggae:["Reggae"], alternatif:["Alternative","Indé"], indie:["Indé"], latin:["Musique latino"], popenespagnol:["Musique latino"], urbanlatin:["Musique latino"],
+  jazz:["Jazz"], classique:["Musique classique"], bandeoriginale:["Films et séries"], musiquesdumonde:["Musiques du monde"], afrobeats:["Musique africaine","Amapiano"],
+  afrobeat:["Musique africaine"], afropop:["Musique africaine","Amapiano"], afrofusion:["Musique africaine","Amapiano"], afrohouse:["Amapiano","Musique africaine"],
+  amapiano:["Amapiano"], kpop:["K-pop"], enfants:["Enfants"], anime:["Anime"], acoustique:["Acoustique"], fetes:["Soirée"], chill:["Chill"], blues:["Coup de blues"],
+  country:["Acoustique"], vocal:["Classiques"], parolesinterpretation:["Classiques"], chansonfrancaise:["Pop française"] };
+let AM_TILES = LS.get("amTiles", null);
+async function loadAmTiles(){
+  if(AM_TILES && Date.now() - (AM_TILES.at||0) < 3*864e5) return;
+  try{ const r = await fetch(`${cfg.url}/functions/v1/amgenres`, { headers:{ apikey:cfg.key, Authorization:"Bearer "+cfg.key } });
+    const list = await r.json(); if(Array.isArray(list) && list.length){ AM_TILES = { at:Date.now(), map:Object.fromEntries(list.map(x => [x.title, x])) }; LS.set("amTiles", AM_TILES); if(curR()?.r === "search") render(); } }catch{}
+}
 const genreKey = g => { const k = norm(g); return GENRE_ALIAS[k] || k; };
 const genreName = k => GENRE_NAME[k] || tracks.find(t => t.genre && genreKey(t.genre) === k)?.genre || [...artOv.values()].find(o => o.genre && genreKey(o.genre) === k)?.genre || k;
 // genre d'un morceau : celui choisi pour l'artiste (ex. Céline Dion → Variété française), sinon celui du fichier
@@ -2116,10 +2137,16 @@ function searchResults(){
     let ge = [...gc.entries()].sort((a,b) => b[1]-a[1] || cmp(genreName(a[0]), genreName(b[0])));
     if(ge.length > 8) ge = ge.filter(([, n]) => n >= 3);
     const genres = ge.map(([k]) => genreName(k));
-    const tileArt = genreTileArtists(genres);
+    // d'abord l'image officielle d'Apple Music pour ce genre (chaque image une seule fois), sinon la photo d'un artiste
+    loadAmTiles();
+    const amUsed = new Set(), amFor = new Map();
+    for(const g of genres){ const cand = (AM_FOR[genreKey(g)] || []).map(x => AM_TILES?.map?.[x]).find(x => x && !amUsed.has(x.title)); if(cand){ amUsed.add(cand.title); amFor.set(g, cand); } }
+    const tileArt = genreTileArtists(genres.filter(g => !amFor.has(g)));
     let h = "";
     if(rec.length) h += `<div class="sec"><h3>Recherches récentes</h3><button data-act="clear-recent">Effacer</button></div>${rec.map(r=>`<button class="recent-q" data-act="re-search" data-arg="${esc(r)}">${ICON.clock}${esc(r)}</button>`).join("")}`;
-    if(genres.length) h += `<div class="sec"><h3>Parcourir par genre</h3></div><div class="genres">${genres.map(g=>{ const a = tileArt.get(g), u = a && tileImg(a);
+    if(genres.length) h += `<div class="sec"><h3>Parcourir par genre</h3></div><div class="genres">${genres.map(g=>{ const am = amFor.get(g);
+      if(am) return `<button class="genre am" data-go="genre:${esc(g)}" style="--gc:${am.bg||genreColor(g)};background-image:url('${cssUrl(am.url)}')!important"><span>${esc(g)}</span></button>`;
+      const a = tileArt.get(g), u = a && tileImg(a);
       const col = genreColor(g);
       return `<button class="genre" data-go="genre:${esc(g)}" style="--gc:${col}">${a?`<div class="cv gimg" data-artimg="${esc(a)}" data-nocover="1" style="${u?`background-image:url('${cssUrl(u)}')`:"background-image:none"};filter:url(#${duoFilter(col)})"></div>`:""}<span>${esc(g)}</span></button>`; }).join("")}</div>`;
     if(!h) h = `<div class="empty"><p>Cherche dans ta bibliothèque, y compris dans les paroles.</p></div>`;
@@ -2217,6 +2244,7 @@ function action(a, arg, el){
     case "q-shuffle": return toggleShuffle();
     case "q-repeat": repeat=(repeat+1)%3; updModes(); return renderQueue();
     case "q-auto": autoplay=!autoplay; LS.set("autoplay",autoplay); updModes(); return renderQueue();
+    case "q-add": closeFull(); setTab("search"); setTimeout(() => $("#sq")?.focus(), 300); toast("Cherche un titre, puis ⋯ → Lire ensuite"); return;
     case "q-clear": queue.splice(qi+1); baseList = [...queue]; userQ.clear(); saveState(); return renderQueue();
     case "q-rm": { const i = +arg; queue.splice(i,1); if(i<qi) qi--; saveState(); return renderQueue(); }
   }
@@ -2908,8 +2936,10 @@ function renderQueue(){
       <button data-act="q-shuffle" class="${shuffle?"on":""}" title="Aléatoire">${ICON.shuffle}</button>
       <button data-act="q-repeat" class="${repeat?"on":""}" title="Répéter">${repeat===2?ICON.repeat1:ICON.repeat}</button>
       <button data-act="q-auto" class="${autoplay?"on":""}" title="Lecture automatique">${ICON.infinity}</button></div>
-    <div class="qhead"><b>À suivre<small>${repeat===2?"Répétition du morceau":repeat===1?"Répétition de la file":autoplay?"Lecture automatique activée":""}</small></b>${upcoming.length?`<button data-act="q-clear">Effacer</button>`:""}</div>
-    <div class="list" id="qList">${upcoming.map((t,i)=>tRow(t,"queue",{ handle:true, dur:false, rm:"q-rm", pi:String(qi+1+i), noAlbum:true }).replace('class="row','data-qi="'+(qi+1+i)+'" class="row')).join("") || `<p style="color:rgba(255,255,255,.5);padding:20px 0;text-align:center">${autoplay?"Écho enchaînera avec des morceaux similaires.":"Rien après ce morceau."}</p>`}</div>`;
+    <div class="qhead"><b>File d'attente</b>${upcoming.length?`<button data-act="q-clear">Effacer</button>`:""}</div>
+    <div class="list" id="qList">${upcoming.map((t,i)=>tRow(t,"queue",{ handle:true, dur:false, rm:"q-rm", pi:String(qi+1+i), noAlbum:true }).replace('class="row','data-qi="'+(qi+1+i)+'" class="row')).join("")}</div>
+    <button class="qadd" data-act="q-add"><span>${ICON.plus}</span>Ajouter à la file d'attente</button>
+    <p class="qfoot">${repeat===1 ? `${ICON.repeat}Répétition de ${nMorceaux(queue.length)}` : autoplay ? `${ICON.infinity}Écho enchaînera avec des morceaux similaires` : upcoming.length ? "" : "Rien après ce morceau"}</p>`;
   sortable($("#qList"), () => {
     const order = [...$("#qList").querySelectorAll(".row")].map(r=>queue[+r.dataset.qi]);
     queue = [...queue.slice(0, qi+1), ...order]; saveState(); renderQueue();
@@ -4791,7 +4821,7 @@ async function uploadOne(f, prog){
 if("serviceWorker" in navigator && (location.protocol==="https:" || location.hostname==="localhost")) navigator.serviceWorker.register("sw.js").catch(()=>{});
 
 /* ============ mises à jour : sur iPhone l'app reste ouverte des jours, on vérifie à chaque retour ============ */
-const ECHO_BUILD = "2026-10-24.12";
+const ECHO_BUILD = "2026-10-24.13";
 let updPending = false, lastUpdCheck = 0;
 async function checkUpdate(){
   if(!navigator.onLine || Date.now() - lastUpdCheck < 60e3) return; lastUpdCheck = Date.now();
