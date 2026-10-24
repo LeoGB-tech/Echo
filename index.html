@@ -4,11 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Écho</title>
-<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<script>
+/* barre d'état de l'iPhone : en sombre, l'app passe dessous (le lecteur va jusqu'en haut) ; en clair, elle prend la couleur de la page */
+(function(){ var t = "auto"; try{ t = JSON.parse(localStorage.getItem("echo.appearance")||'"auto"'); }catch(e){}
+  var dark = t==="dark" || (t!=="light" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.write('<meta name="apple-mobile-web-app-status-bar-style" content="' + (dark ? "black-translucent" : "default") + '">');
+  document.write('<meta name="theme-color" content="' + (dark ? "#000000" : "#ffffff") + '">'); })();
+</script>
 <meta name="apple-mobile-web-app-title" content="Écho">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -324,6 +328,21 @@ main#view{max-width:1100px;margin:0 auto;padding:0 16px}
 .qhead small{color:rgba(255,255,255,.55);font-size:13px;display:block;font-weight:400}
 #queuePanel .row:hover{background:rgba(255,255,255,.06)}
 #queuePanel .row .a{color:rgba(255,255,255,.6)}
+#queuePanel .list .row{padding:6px 0;gap:12px}
+#queuePanel .row .handle{color:rgba(255,255,255,.5);margin-right:-6px}
+#queuePanel .row .rm{width:30px;margin-right:-2px}
+/* glisser vers la droite */
+.row.sw{overflow:hidden;position:relative}
+.row.sw > *:not(.swk){transform:translateX(var(--sx,0px))}
+.row.swanim > *:not(.swk),.row.swanim .swk{transition:transform .2s ease,width .2s ease}
+.swk{position:absolute;left:0;top:0;bottom:0;width:var(--sx,0px);display:flex;overflow:hidden;z-index:1}
+.swk button{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:#fff;font-size:11px;font-weight:600;background:#5856d6;white-space:nowrap;transition:flex .18s ease}
+.swk button:nth-child(2){background:#7d7aff}
+.swk button.lst{background:#ff9500}
+.swk svg{width:20px;height:20px}
+.swk span{max-width:100%;padding:0 4px;white-space:normal;text-align:center;line-height:1.15}
+.row.swfull .swk button:not(.lst){flex:0 0 0;padding:0}
+.row.swfull .swk button.lst{flex:1 1 100%}
 .seek{margin-top:6px}
 input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:6px;border-radius:6px;outline:none;cursor:pointer;
   background:linear-gradient(90deg,rgba(255,255,255,.9) var(--p,0%),rgba(255,255,255,.2) var(--p,0%))}
@@ -992,6 +1011,7 @@ function applyTheme(t){
   if(!APPEAR[t]) t = "auto"; LS.set("appearance", t);
   const real = t==="auto" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : t;
   document.documentElement.dataset.theme = real;
+  setTimeout(() => { if(!$("#full")?.classList.contains("open")) statusBar(false); }, 50);
 }
 applyTheme(LS.get("appearance","auto"));
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => { if(LS.get("appearance","auto")==="auto") applyTheme("auto"); });
@@ -1673,7 +1693,7 @@ function tRow(t, key, o={}){
     <div class="meta"><div class="t"><span>${esc(t.title)}</span>${badges}</div><div class="a">${sub}</div></div>
     ${o.album?`<div class="al">${esc(albName(t))}</div>`:""}
     ${o.dur!==false?`<div class="d">${fmt(t.duration)}</div>`:""}
-    ${o.rm?`<button class="rm" data-act="${o.rm}" data-arg="${o.pi||t.id}">${ICON.remove}</button>`:`<button class="more" data-more="${t.id}" data-ctx="${o.ctx||""}">${ICON.more}</button>`}
+    ${o.rm?`<button class="rm" data-act="${o.rm}" data-arg="${o.pi||t.id}">${ICON.remove}</button>`:`<button class="more" data-more="${t.id}" data-ctx="${o.ctx||""}">${ICON.more}</button>`}${o.handleR?`<div class="handle">${ICON.handle}</div>`:""}
   </div>`;
 }
 const albTile = a => `<button class="tile" data-go="album:${esc(a.key)}">${cv(a.cover||a.tracks[0], "", a.name+a.artist, a.name.charAt(0).toUpperCase())}<div class="t">${esc(a.name)}</div><div class="a">${esc(a.artist)}</div></button>`;
@@ -2206,6 +2226,57 @@ let lpT; document.addEventListener("touchstart", e => { const row=e.target.close
 document.addEventListener("touchmove", () => clearTimeout(lpT), {passive:true});
 document.addEventListener("touchcancel", () => clearTimeout(lpT), {passive:true});
 document.addEventListener("touchend", e => { clearTimeout(lpT); const row=e.target.closest?.(".row[data-lp]"); if(row){ e.preventDefault(); delete row.dataset.lp; } }, {passive:false});
+/* ---- glisser un morceau vers la droite, comme sur Apple Music :
+   un peu → « Lire ensuite » (début de la file) ou « Après le suivant » ; jusqu'au bout → « Lire en dernier » (fin de la file) ---- */
+let sw = null, swOpen = null, swJust = 0;
+const SW_W = 216;
+function swClose(row){ if(!row) return; row.classList.add("swanim"); row.style.setProperty("--sx", "0px"); row.classList.remove("swfull"); setTimeout(() => { row.classList.remove("sw", "swanim"); row.querySelector(".swk")?.remove(); }, 220); if(swOpen === row) swOpen = null; }
+function swDo(row, where){
+  const t = byId.get(row.dataset.id); swClose(row); if(!t) return;
+  navigator.vibrate?.(10);
+  if(where === "last"){ enqueueLast([t]); toast("Ajouté à la fin de la file d'attente"); return; }
+  if(where === "next"){ enqueueNext([t]); toast("Sera lu ensuite"); return; }
+  if(where === "after"){ // après le prochain morceau
+    if(!queue.length || radioMode || qi >= queue.length - 1) return enqueueNext([t]);
+    const cur = queue[qi]; userQ.add(t.id);
+    queue = queue.filter((x, i) => i <= qi || x.id !== t.id); qi = queue.indexOf(cur);
+    queue.splice(Math.min(qi + 2, queue.length), 0, t); saveState(); renderQueue(); toast("Ajouté après le prochain morceau");
+  }
+}
+document.addEventListener("touchstart", e => {
+  if(swOpen && !e.target.closest(".swk")){ swClose(swOpen); swJust = Date.now(); }
+  const row = e.target.closest(".row[data-id]");
+  if(!row || e.target.closest(".handle,.swk") || row.closest("#queuePanel,.sheet") || !byId.get(row.dataset.id)) { sw = null; return; }
+  sw = { row, x:e.touches[0].clientX, y:e.touches[0].clientY, lock:null, dx:0 };
+}, { passive:true });
+document.addEventListener("touchmove", e => {
+  if(!sw) return;
+  const dx = e.touches[0].clientX - sw.x, dy = e.touches[0].clientY - sw.y;
+  if(!sw.lock){
+    if(dx > 12 && Math.abs(dx) > Math.abs(dy) * 1.4){
+      sw.lock = "h"; clearTimeout(lpT); const r = sw.row; r.classList.add("sw");
+      if(!r.querySelector(".swk")) r.insertAdjacentHTML("afterbegin", `<div class="swk"><button data-sw="next">${ICON.playNext}<span>Lire ensuite</span></button><button data-sw="after">${ICON.playNext}<span>Après le suivant</span></button><button class="lst" data-sw="last">${ICON.playLast}<span>Lire en dernier</span></button></div>`);
+    } else if(Math.abs(dy) > 10 || dx < -12){ sw = null; return; }
+    else return;
+  }
+  e.preventDefault();
+  const w = sw.row.offsetWidth, x = Math.max(0, Math.min(w, dx - 12));
+  sw.dx = x; sw.row.style.setProperty("--sx", x + "px");
+  const full = x > Math.max(SW_W + 40, w * .62);
+  if(full !== sw.row.classList.contains("swfull")){ sw.row.classList.toggle("swfull", full); if(full) navigator.vibrate?.(8); }
+}, { passive:false });
+document.addEventListener("touchend", () => {
+  if(!sw) return; const { row, lock, dx } = sw; sw = null; if(lock !== "h") return;
+  swJust = Date.now();
+  if(row.classList.contains("swfull")) return swDo(row, "last");
+  if(dx > 60){ row.classList.add("swanim"); row.style.setProperty("--sx", SW_W + "px"); swOpen = row; setTimeout(() => row.classList.remove("swanim"), 220); }
+  else swClose(row);
+});
+document.addEventListener("click", e => {
+  const b = e.target.closest(".swk [data-sw]");
+  if(b){ e.stopPropagation(); e.preventDefault(); return swDo(b.closest(".row"), b.dataset.sw); }
+  if(Date.now() - swJust < 450 && e.target.closest(".row[data-id]")){ e.stopPropagation(); e.preventDefault(); }
+}, true);
 
 function action(a, arg, el){
   switch(a){
@@ -2727,7 +2798,7 @@ async function load(autoplay, metaOnly){
   $("#miniT").textContent = $("#fT").textContent = $("#fmT").textContent = t.title;
   $("#miniA").textContent = $("#fA").textContent = $("#fmA").textContent = t.artist || "Artiste inconnu";
   paint($("#miniCv"), t); paint($("#bigart"), t); paint($("#fmCv"), t);
-  $("#bgart").setAttribute("style", cvStyle(t));
+  $("#bgart").setAttribute("style", cvStyle(t)); sampleTop(t);
   $("#fmtLbl").textContent = (t.path.split(".").pop()||"").toUpperCase()==="FLAC" ? "Sans perte" : "";
   document.title = `${t.title} · Écho`;
   updFav();
@@ -2845,11 +2916,33 @@ document.querySelectorAll("[data-icon]").forEach(e => e.innerHTML = ICON[e.datas
 $("#lyrBtn").innerHTML = ICON.lyrics; $("#qBtn").innerHTML = ICON.queue; $("#routeBtn").innerHTML = ICON.airplay;
 
 // la barre d'état de l'iPhone (heure, batterie) prend la couleur du lecteur quand il est ouvert → vrai plein écran
+// iPhone : on remplace la balise (Safari réagit mieux à une nouvelle balise qu'à un simple changement)
+// couleur = haut du fond flou du lecteur, pour que l'heure/batterie se fondent dedans
+let fullTop = "#1c1c1e";
+function setThemeColor(c){
+  document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.remove());
+  const m = document.createElement("meta"); m.name = "theme-color"; m.content = c; document.head.appendChild(m);
+  document.documentElement.style.backgroundColor = c;
+}
 function statusBar(dark){
-  document.querySelectorAll('meta[name="theme-color"]').forEach(m => {
-    if(!m.dataset.orig) m.dataset.orig = m.content;
-    m.content = dark ? "#16141a" : m.dataset.orig;
-  });
+  if(dark) return setThemeColor(fullTop);
+  document.documentElement.style.backgroundColor = "";
+  setThemeColor(getComputedStyle(document.body).backgroundColor || "#ffffff");
+}
+function sampleTop(t){
+  const m = /url\(["']?([^"')]+)/.exec(cvStyle(t) || ""); if(!m){ fullTop = "#1c1c1e"; return; }
+  const img = new Image(); img.crossOrigin = "anonymous";
+  img.onload = () => { try{
+    const c = document.createElement("canvas"); c.width = c.height = 8; const x = c.getContext("2d"); x.drawImage(img, 0, 0, 8, 8);
+    const d = x.getImageData(0, 0, 8, 3).data; let r=0,g=0,b=0; for(let i=0;i<d.length;i+=4){ r+=d[i]; g+=d[i+1]; b+=d[i+2]; } const n = d.length/4;
+    // même rendu que le fond : flou, saturé, assombri (brightness .6, opacité .9 sur #1c1c1e)
+    const L = (r+g+b)/(3*n), sat = v => Math.max(0, Math.min(255, L + (v/n - L) * 1.5));
+    const f = v => Math.round(sat(v) * .6 * .9 + 28 * .1).toString(16).padStart(2, "0");
+    fullTop = "#" + f(r) + f(g) + f(b);
+    if($("#full").classList.contains("open")) statusBar(true);
+  }catch{ fullTop = "#1c1c1e"; } };
+  img.onerror = () => { fullTop = "#1c1c1e"; };
+  img.src = m[1];
 }
 function openFull(){ if(!queue.length && !radioMode) return; $("#full").classList.add("open"); document.body.classList.add("lock"); statusBar(true); history.pushState({ k:"full" }, ""); }
 let ignorePop = false;
@@ -2954,7 +3047,7 @@ function renderQueue(){
       <button data-act="q-repeat" class="${repeat?"on":""}" title="Répéter">${repeat===2?ICON.repeat1:ICON.repeat}</button>
       <button data-act="q-auto" class="${autoplay?"on":""}" title="Lecture automatique">${ICON.infinity}</button></div>
     <div class="qhead"><b>File d'attente</b>${upcoming.length?`<button data-act="q-clear">Effacer</button>`:""}</div>
-    <div class="list" id="qList">${upcoming.map((t,i)=>tRow(t,"queue",{ handle:true, dur:false, rm:"q-rm", pi:String(qi+1+i), noAlbum:true }).replace('class="row','data-qi="'+(qi+1+i)+'" class="row')).join("")}</div>
+    <div class="list" id="qList">${upcoming.map((t,i)=>tRow(t,"queue",{ handleR:true, dur:false, rm:"q-rm", pi:String(qi+1+i), noAlbum:true }).replace('class="row','data-qi="'+(qi+1+i)+'" class="row')).join("")}</div>
     <button class="qadd" data-act="q-add"><span>${ICON.plus}</span>Ajouter à la file d'attente</button>
     <p class="qfoot">${repeat===1 ? `${ICON.repeat}Répétition de ${nMorceaux(queue.length)}` : autoplay ? `${ICON.infinity}Écho enchaînera avec des morceaux similaires` : upcoming.length ? "" : "Rien après ce morceau"}</p>`;
   sortable($("#qList"), () => {
@@ -4973,7 +5066,7 @@ async function uploadOne(f, prog){
 if("serviceWorker" in navigator && (location.protocol==="https:" || location.hostname==="localhost")) navigator.serviceWorker.register("sw.js").catch(()=>{});
 
 /* ============ mises à jour : sur iPhone l'app reste ouverte des jours, on vérifie à chaque retour ============ */
-const ECHO_BUILD = "2026-10-24.21";
+const ECHO_BUILD = "2026-10-24.22";
 let updPending = false, lastUpdCheck = 0;
 async function checkUpdate(){
   if(!navigator.onLine || Date.now() - lastUpdCheck < 60e3) return; lastUpdCheck = Date.now();
