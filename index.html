@@ -269,7 +269,8 @@ main#view{max-width:1100px;margin:0 auto;padding:0 16px}
 .full .bgart{position:absolute;inset:-30%;background-size:cover;background-position:center;filter:blur(80px) saturate(1.7) brightness(.6);opacity:.9;z-index:-1}
 .full .shade{position:absolute;inset:0;z-index:-1;background:linear-gradient(rgba(10,8,12,.05),rgba(10,8,12,.6) 80%)}
 .fwrap{max-width:520px;width:100%;margin:0 auto;display:flex;flex-direction:column;flex:1;min-height:0}
-.grabber{width:40px;height:5px;border-radius:5px;background:rgba(255,255,255,.35);margin:2px auto 8px;cursor:pointer}
+.grabber{width:40px;height:5px;border-radius:5px;background:rgba(255,255,255,.35);margin:2px auto 8px;cursor:grab;position:relative}
+.grabber::before,.sheet .grab::before{content:"";position:absolute;left:-60px;right:-60px;top:-18px;bottom:-18px}
 .fstage{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:center}
 .bigart{width:min(100%,44vh);aspect-ratio:1;margin:0 auto;border-radius:22px;font-size:110px;box-shadow:0 30px 80px rgba(0,0,0,.55);transition:transform .5s cubic-bezier(.2,.8,.2,1)}
 .full.is-paused .bigart{transform:scale(.86)}
@@ -336,7 +337,7 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border:0;border-radiu
 .sheet{width:100%;max-width:480px;max-height:88vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:24px 24px 0 0;padding:10px 12px calc(16px + var(--safe-b));animation:up .28s cubic-bezier(.2,.8,.2,1)}
 @media(min-width:600px){.sheet-bg{align-items:center}.sheet{border-radius:24px}}
 @keyframes fade{from{opacity:0}}@keyframes up{from{transform:translateY(40px);opacity:.5}}
-.sheet .grab{width:40px;height:5px;border-radius:5px;background:var(--line);margin:4px auto 12px}
+.sheet .grab{width:40px;height:5px;border-radius:5px;background:var(--line);margin:4px auto 12px;position:relative;cursor:grab}
 .sheet .hd{display:flex;gap:12px;align-items:center;padding:4px 8px 14px;border-bottom:1px solid var(--line);margin-bottom:6px}
 .sheet .hd .cv,.sheet .hd .mosaic{width:52px;height:52px;border-radius:10px;font-size:20px;flex-shrink:0}
 .sheet .hd .t{font-weight:600}
@@ -618,6 +619,8 @@ input[type=range]{height:4px}
 .shareV #sPlay svg{width:30px;height:30px}
 .shareV .sbar input{width:100%;accent-color:#fff}.shareV .sclk{display:flex;justify-content:space-between;font-size:12px;opacity:.65;margin-top:4px}
 .shareV small{display:block;margin-top:26px;opacity:.55;font-size:12px}
+.hero .byl{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:inherit}.hero .bysep{color:var(--a1);font-size:20px;margin-right:6px}
+.gdot{width:22px;height:22px;border-radius:6px;flex:none}
 #routeBtn.remote{color:var(--a1,#fa2d48)!important;opacity:1!important}
 .offBanner{display:flex;gap:14px;align-items:flex-start;background:var(--card);border-radius:14px;padding:14px 16px;margin:6px 0 8px}
 .offBanner svg{width:26px;height:26px;flex:none;color:var(--a1);margin-top:2px}.offBanner b{display:block;font-size:16px}.offBanner span{color:var(--dim);font-size:14px}
@@ -1273,15 +1276,35 @@ async function offlineCovers(){
     const r = await c.match(offKey("c"+t.id)); if(r) urls[t.cover_path] = URL.createObjectURL(await r.blob());
   }
 }
-const aArtist = t => t.album_artist || t.artist || "Artiste inconnu";
+/* ---- plusieurs artistes sur un même titre (« A, B & C », « A feat. B », « A x B ») : chacun a sa page, comme sur Apple Music ---- */
+const ARTIST_KEEP = /tyler, the creator|earth, wind (?:&|and) fire|crosby, stills,? nash (?:&|and) young|crosby, stills (?:&|and) nash|blood, sweat (?:&|and) tears|emerson, lake (?:&|and) palmer|peter, paul (?:&|and) mary/gi;
+let soloArtists = new Set(), splitCache = new Map();
+function splitArtists(s){
+  s = String(s||"").trim(); if(!s) return [];
+  if(splitCache.has(s)) return splitCache.get(s);
+  const keep = []; let x = s.replace(ARTIST_KEEP, m => { keep.push(m); return `\u0002${keep.length-1}\u0002`; });
+  const parts = x.split(/\s*(?:,|;|\s\/\s|\s+feat\.?\s+|\s+ft\.?\s+|\s+featuring\s+|\s+x\s+|\s+avec\s+|\s+with\s+|\s+vs\.?\s+)\s*/i).filter(Boolean);
+  const list = parts.length > 1, out = [];
+  for(const p of parts){
+    const halves = p.split(/\s+(?:&|et|and)\s+/i);
+    if(halves.length > 1 && (list || halves.every(h => soloArtists.has(norm(h))))) out.push(...halves); else out.push(p);
+  }
+  const res = [...new Set(out.map(p => p.replace(/\u0002(\d+)\u0002/g, (_, i) => keep[+i]).trim()).filter(Boolean))];
+  splitCache.set(s, res.length ? res : [s]);
+  return splitCache.get(s);
+}
+const credit = t => t.album_artist || t.artist || "Artiste inconnu";
+const aArtist = t => splitArtists(credit(t))[0] || "Artiste inconnu";
 const albName = t => t.album || `${t.title} - Single`;
 const albKey = t => aArtist(t) + "\u0001" + albName(t);
 function rebuild(){
   byId.clear(); tracks.forEach(t => byId.set(t.id, t));
+  splitCache = new Map(); soloArtists = new Set();
+  for(const t of tracks) for(const s of [t.album_artist, t.artist]) if(s && !/,|;|\sfeat|\sft\.|\sx\s|\s&\s|\set\s|\sand\s/i.test(s)) soloArtists.add(norm(s));
   const am = new Map();
   for(const t of tracks){
     const k = albKey(t);
-    if(!am.has(k)) am.set(k, { key:k, name:albName(t), artist:aArtist(t), tracks:[], added:t.created_at, year:null, genre:null });
+    if(!am.has(k)) am.set(k, { key:k, name:albName(t), artist:aArtist(t), credit:credit(t), tracks:[], added:t.created_at, year:null, genre:null });
     const a = am.get(k); a.tracks.push(t);
     if(t.created_at > a.added) a.added = t.created_at;
     a.year = a.year || t.year; a.genre = a.genre || t.genre;
@@ -1289,13 +1312,12 @@ function rebuild(){
   albums = [...am.values()];
   albums.forEach(a => { a.tracks.sort((x,y)=>(x.disc_no||1)-(y.disc_no||1)||(x.track_no||999)-(y.track_no||999)||cmp(x.title,y.title)); a.cover = a.tracks.find(t=>t.cover_url || t.cover_path); });
   const rm = new Map();
+  const addTo = (n, t, alb) => { if(!rm.has(n)) rm.set(n, { name:n, tracks:[], albums:new Set() }); const a = rm.get(n); if(!a.tracks.includes(t)) a.tracks.push(t); if(alb) a.albums.add(albKey(t)); };
   for(const t of tracks){
-    const n = aArtist(t);
-    if(!rm.has(n)) rm.set(n, { name:n, tracks:[], albums:new Set() });
-    rm.get(n).tracks.push(t); rm.get(n).albums.add(albKey(t));
+    // chaque artiste crédité de l'album a l'album sur sa page ; les invités (feat.) ont le titre
+    splitArtists(credit(t)).forEach(n => addTo(n, t, true));
+    if(t.artist && t.artist !== t.album_artist) splitArtists(t.artist).forEach(n => addTo(n, t, false));
   }
-  // featured artists also list the track
-  for(const t of tracks) if(t.artist && t.album_artist && t.artist!==t.album_artist && rm.has(t.artist)) rm.get(t.artist).tracks.push(t);
   artists = [...rm.values()].sort((a,b)=>cmp(a.name,b.name));
   plItems.sort((a,b)=>a.position-b.position);
 }
@@ -1422,6 +1444,7 @@ function refreshArtImg(name){
   const u = artUrl(name);
   document.querySelectorAll(`[data-artimg="${CSS.escape(name)}"]`).forEach(el => {
     if(u){ el.style.backgroundImage = `url('${cssUrl(u)}'),${gradFor(name)}`; el.textContent = ""; }
+    else if(el.dataset.nocover){ el.style.backgroundImage = "none"; }
     else { const a = artists.find(x=>x.name===name); const ct = a?.tracks.find(t=>coverOf(t)); const fl = el.style.filter; el.setAttribute("style", cvStyle(ct, name)); if(fl) el.style.filter = fl; el.textContent = ct ? "" : name.charAt(0).toUpperCase(); }
   });
 }
@@ -1461,7 +1484,7 @@ const artQ = []; let artBusy = 0;
 function loadArtistImages(){
   document.querySelectorAll("[data-artimg]").forEach(el => {
     const n = el.dataset.artimg;
-    if(artOv.has(n) || LS.get("art2:"+n, null) !== null || n==="Artiste inconnu" || artQ.includes(n)) return; artQ.push(n);
+    if(artOv.get(n)?.image_url || artOv.get(n)?.image_path || LS.get("art2:"+n, null) !== null || n==="Artiste inconnu" || artQ.includes(n)) return; artQ.push(n);
   });
   pumpArt();
 }
@@ -1479,10 +1502,30 @@ async function saveArtistPhoto(name, patch){
   artOv.set(name, row); LS.set("artOv", [...artOv]); refreshArtImg(name); toast("Photo mise à jour ✓");
 }
 async function resetArtistPhoto(name){
-  await sb.from("artist_images").delete().eq("name", name);
-  artOv.delete(name); LS.set("artOv", [...artOv]); LS.set("art2:"+name, null);
+  const g = artOv.get(name)?.genre;
+  if(g){ await sb.from("artist_images").update({ image_url:null, image_path:null }).eq("name", name); artOv.set(name, { ...artOv.get(name), image_url:null, image_path:null }); }
+  else { await sb.from("artist_images").delete().eq("name", name); artOv.delete(name); }
+  LS.set("artOv", [...artOv]); LS.set("art2:"+name, null);
   try{ localStorage.removeItem("echo.art2:"+name); }catch{}
   refreshArtImg(name); artQ.push(name); pumpArt(); toast("Photo automatique");
+}
+// genre d'un artiste pour toute l'app (tuiles, stations, playlists intelligentes…), sans toucher aux fichiers
+function artistGenreSheet(name){
+  const cur = artOv.get(name)?.genre || null;
+  const all = [...new Set([...tracks.map(t=>t.genre), ...[...artOv.values()].map(o=>o.genre), "Variété française", "Hip-hop/Rap", "Pop", "Rock", "Électronique", "Dance", "R&B/Soul", "Jazz", "Classique", "Latino", "Reggae", "Alternatif", "Bande originale"].filter(Boolean).map(g => genreName(genreKey(g))))].sort(cmp);
+  sheet(`<h3>Genre de ${esc(name)}</h3><p class="note">Utilisé partout dans Écho (genres, stations, playlists intelligentes). Tes fichiers ne sont pas modifiés.</p>
+    ${it("g-auto","sparkle","Automatique (genre des fichiers)", cur ? "" : "on")}
+    <div class="sep"></div>${all.map(g => `<button class="it ${genreKey(g)===genreKey(cur||"")?"on":""}" data-s="g-set" data-v="${esc(g)}"><span class="gdot" style="background:${genreColor(g)}"></span><span>${esc(g)}</span></button>`).join("")}`,
+  async (k, v) => {
+    if(k!=="g-auto" && k!=="g-set") return true;
+    const genre = k==="g-set" ? v : null;
+    const o = artOv.get(name) || { name, image_url:null, image_path:null };
+    const row = { name, image_url:o.image_url||null, image_path:o.image_path||null, genre, updated_at:new Date().toISOString() };
+    const { error } = await sb.from("artist_images").upsert(row);
+    if(error){ toast("Erreur : "+error.message); return true; }
+    artOv.set(name, { ...o, ...row }); LS.set("artOv", [...artOv]); saveCache(); rebuild(); render();
+    toast(genre ? `${name} : ${genre}` : `${name} : genre automatique`);
+  });
 }
 async function artistPhotoSheet(name){
   const a = artists.find(x=>x.name===name);
@@ -1491,12 +1534,14 @@ async function artistPhotoSheet(name){
   const bg = sheet(`<h3>Photo de ${esc(name)}</h3>
     ${it("device","upload","Choisir une image sur l'appareil")}
     ${it("auto","sparkle","Photo automatique")}
+    ${it("genre","album","Genre de l'artiste","","", esc(artOv.get(name)?.genre || "Automatique"))}
     <div class="sep"></div><p class="note">Résultats Deezer — touche la bonne :</p>
     <div class="pgrid" id="dzGrid"><p class="note">Recherche…</p></div>
     ${covers.length?`<div class="sep"></div><p class="note">Ou une pochette d'album :</p><div class="pgrid">${covers.slice(0,12).map(t=>`<button data-s="cover" data-v="${esc(t.cover_path)}">${cv(t,"circle")}<b>${esc(albName(t))}</b></button>`).join("")}</div>`:""}`,
   (s2, v) => {
     if(s2==="device"){ pickCover(async blob => { const path = newPath(`${user.id}/artists/${Date.now()}.jpg`); try{ await putObject(path, blob, "image/jpeg"); Object.assign(urls, await signPaths([path])); saveArtistPhoto(name, { image_path:path }); }catch(e){ toast("Erreur : "+e.message); } }); return; }
     if(s2==="auto") return resetArtistPhoto(name);
+    if(s2==="genre") return artistGenreSheet(name), true;
     if(s2==="dz") return saveArtistPhoto(name, { image_url:v });
     if(s2==="cover") return saveArtistPhoto(name, { image_path:v });
   });
@@ -1668,7 +1713,7 @@ function getMix(id){
   if(k==="rediscover") return { id, kicker:"Redécouverte", name:"À redécouvrir", desc:"Des titres que tu n'as pas écoutés depuis longtemps", tracks:rediscover(), grad:"linear-gradient(135deg,#2bb3a3,#20507a)" };
   if(k==="new") return { id, kicker:"Nouveautés", name:"Fraîchement ajoutés", desc:"Tes derniers ajouts", tracks:tracks.slice(0,50), grad:"linear-gradient(135deg,#ffb347,#e0603b)" };
   if(k==="week"){ const since = new Date(Date.now()-7*864e5).toISOString(); return { id, kicker:"Récap", name:"Ajoutés cette semaine", desc:"Tout ce que tu as mis en ligne ces 7 derniers jours", tracks:tracks.filter(t=>t.created_at>=since), grad:"linear-gradient(135deg,#6a5cff,#ff6b9a)", ordered:true }; }
-  if(k==="genre") return { id, kicker:"Station", name:arg, desc:`Le meilleur de ta musique ${arg}`, tracks:tracks.filter(t=>sameGenre(t.genre, arg)), grad:gradFor(arg) };
+  if(k==="genre") return { id, kicker:"Station", name:arg, desc:`Le meilleur de ta musique ${arg}`, tracks:tracks.filter(t=>sameGenre(genreOf(t), arg)), grad:gradFor(arg) };
   if(k==="ess"){ const a = artistOf(arg); if(!a) return null; const ranked = essTracks(arg);
     const l = ranked || uniqT(a.tracks).sort((x,y)=>(y.play_count||0)-(x.play_count||0) || (x.track_no||99)-(y.track_no||99)).slice(0,25);
     return { id, kicker:"Indispensables", name:arg, title:`Indispensables : ${arg}`, desc: `Les plus grands titres de ${arg}, dans l'ordre de popularité`, tracks:l, artist:arg, ordered:true, pending:!ranked }; }
@@ -1689,7 +1734,26 @@ const GENRE_NAME = { electronique:"Électronique", rap:"Hip-hop/Rap", bandeorigi
 const GENRE_COLOR = { pop:"#e8578a", rap:"#5b7cf0", rock:"#ee5d36", metal:"#3a3a40", dance:"#2fb67c", electronique:"#7b5cf0", techno:"#168f8a", house:"#18a7c9", country:"#e3922b",
   rbsoul:"#9a63e8", variete:"#e63950", bandeoriginale:"#d9a21f", alternatif:"#e0573f", latin:"#f04a8c", jazz:"#2d6fd1", classique:"#b8892c", reggae:"#2f9e4f", blues:"#3d5fb8", kpop:"#f25c9a", afro:"#e07a22", funk:"#d6408f", folk:"#8a9a3b" };
 const genreKey = g => { const k = norm(g); return GENRE_ALIAS[k] || k; };
-const genreName = k => GENRE_NAME[k] || tracks.find(t => t.genre && genreKey(t.genre) === k)?.genre || k;
+const genreName = k => GENRE_NAME[k] || tracks.find(t => t.genre && genreKey(t.genre) === k)?.genre || [...artOv.values()].find(o => o.genre && genreKey(o.genre) === k)?.genre || k;
+// genre d'un morceau : celui choisi pour l'artiste (ex. Céline Dion → Variété française), sinon celui du fichier
+const genreOf = t => artOv.get(aArtist(t))?.genre || t.genre || null;
+// une photo d'artiste différente par tuile, de préférence un artiste dont c'est le genre principal, jamais une pochette
+function genreTileArtists(genres){
+  const main = new Map(), score = new Map();
+  for(const t of tracks){ const a = aArtist(t), g = genreOf(t); if(!a || a==="Artiste inconnu" || !g) continue;
+    const m = main.get(a) || new Map(); const k = genreKey(g); m.set(k, (m.get(k)||0) + 1); main.set(a, m);
+    const s = score.get(a+"|"+k) || 0; score.set(a+"|"+k, s + 1 + (t.play_count||0)*3 + (t.favorite?2:0)); }
+  const primary = a => [...(main.get(a)||new Map()).entries()].sort((x,y)=>y[1]-x[1])[0]?.[0];
+  const noPhoto = a => !artUrl(a) && LS.get("art2:"+a, null) === "";
+  const used = new Set(), out = new Map();
+  for(const g of genres){
+    const k = genreKey(g);
+    const cands = [...main.keys()].filter(a => main.get(a).has(k) && !used.has(a) && !noPhoto(a))
+      .sort((x,y) => (primary(y)===k) - (primary(x)===k) || (artUrl(y)?1:0) - (artUrl(x)?1:0) || score.get(y+"|"+k) - score.get(x+"|"+k));
+    if(cands[0]){ used.add(cands[0]); out.set(g, cands[0]); }
+  }
+  return out;
+}
 const sameGenre = (a, b) => !!a && !!b && genreKey(a) === genreKey(b);
 const genreColor = g => { const k = genreKey(g); if(GENRE_COLOR[k]) return GENRE_COLOR[k]; const pal = Object.values(GENRE_COLOR); let h = 0; for(const c of k) h = (h*31 + c.charCodeAt(0)) >>> 0; return pal[h % pal.length]; };
 // artiste « tête d'affiche » d'une liste ; `used` évite de remettre la même photo sur deux cartes voisines
@@ -1916,7 +1980,7 @@ function vAlbum(key){
   const k = reg("album", a.tracks);
   const multi = new Set(a.tracks.map(t=>t.disc_no||1)).size>1;
   return `<div class="hero">${cv(a.cover||a.tracks[0], "", a.name+a.artist, a.name.charAt(0).toUpperCase())}<div style="flex:1;min-width:0;width:100%">
-    <h1>${esc(a.name)}</h1><button class="by" data-go="artist:${esc(a.artist)}">${esc(a.artist)}</button>
+    <h1>${esc(a.name)}</h1><div class="byl">${splitArtists(a.credit||a.artist).map(n=>`<button class="by" data-go="artist:${esc(n)}">${esc(n)}</button>`).join('<span class="bysep">, </span>')}</div>
     <div class="info">${[a.genre,a.year].filter(Boolean).map(esc).join(" · ")||"&nbsp;"}</div>${playbar(k)}</div></div>
     <div class="list">${a.tracks.map((t,i)=>tRow(t,k,{num:(multi?(t.disc_no||1)+"-":"")+(t.track_no||i+1), sub: t.artist && t.artist!==a.artist ? esc(t.artist) : "", dur:true, ctx:"album"})).join("")}</div>${collFoot(a.tracks)}`;
 }
@@ -1950,8 +2014,8 @@ function vSmart(id){
     <div class="list">${l.map(t=>tRow(t,k,{sub: id==="top" ? `${esc(t.artist||"")} · ${plural(t.play_count,"écoute")}` : undefined})).join("")}</div>${l.length?collFoot(l):`<div class="empty"><p>Rien ici pour le moment.</p></div>`}`;
 }
 function vGenre(g){
-  const l = tracks.filter(t=>sameGenre(t.genre, g)); const k = reg("genre", l);
-  const albs = albums.filter(a=>sameGenre(a.genre, g));
+  const l = tracks.filter(t=>sameGenre(genreOf(t), g)); const k = reg("genre", l);
+  const albs = albums.filter(a=>a.tracks.some(t=>sameGenre(genreOf(t), g)));
   return `<h1 class="lt">${esc(g)}</h1><p class="sub">${nMorceaux(l.length)}</p>${playbar(k)}
     ${albs.length?`<div class="sec"><h3>Albums</h3></div><div class="strip">${albs.map(albTile).join("")}</div>`:""}
     <div class="sec"><h3>Morceaux</h3></div><div class="list">${l.map(t=>tRow(t,k)).join("")}</div>`;
@@ -1965,13 +2029,14 @@ function searchResults(){
   const q = searchQ.trim().toLowerCase();
   if(!q){
     const rec = LS.get("recentQ", []);
-    const gc = new Map(); tracks.forEach(t => { if(t.genre){ const k = genreKey(t.genre); gc.set(k, (gc.get(k)||0) + 1); } });
+    const gc = new Map(); tracks.forEach(t => { const g0 = genreOf(t); if(g0){ const k = genreKey(g0); gc.set(k, (gc.get(k)||0) + 1); } });
     const genres = [...gc.entries()].sort((a,b) => b[1]-a[1] || cmp(genreName(a[0]), genreName(b[0]))).map(([k]) => genreName(k));
+    const tileArt = genreTileArtists(genres);
     let h = "";
     if(rec.length) h += `<div class="sec"><h3>Recherches récentes</h3><button data-act="clear-recent">Effacer</button></div>${rec.map(r=>`<button class="recent-q" data-act="re-search" data-arg="${esc(r)}">${ICON.clock}${esc(r)}</button>`).join("")}`;
-    if(genres.length) h += `<div class="sec"><h3>Parcourir par genre</h3></div><div class="genres">${(() => { artUsed = new Set(); return ""; })()}${genres.map(g=>{ const a = headliner(tracks.filter(t=>sameGenre(t.genre, g)), artUsed);
+    if(genres.length) h += `<div class="sec"><h3>Parcourir par genre</h3></div><div class="genres">${genres.map(g=>{ const a = tileArt.get(g), u = a && artUrl(a);
       const col = genreColor(g);
-      return `<button class="genre" data-go="genre:${esc(g)}" style="--gc:${col}">${a?`<div class="cv gimg" data-artimg="${esc(a)}" style="${artBg(a)};filter:url(#${duoFilter(col)})"></div>`:""}<span>${esc(g)}</span></button>`; }).join("")}</div>`;
+      return `<button class="genre" data-go="genre:${esc(g)}" style="--gc:${col}">${a?`<div class="cv gimg" data-artimg="${esc(a)}" data-nocover="1" style="${u?`background-image:url('${cssUrl(u)}')`:"background-image:none"};filter:url(#${duoFilter(col)})"></div>`:""}<span>${esc(g)}</span></button>`; }).join("")}</div>`;
     if(!h) h = `<div class="empty"><p>Cherche dans ta bibliothèque, y compris dans les paroles.</p></div>`;
     return h;
   }
@@ -2084,6 +2149,7 @@ function sheet(html, onAct){
   closeSheets();
   const bg = document.createElement("div"); bg.className = "sheet-bg";
   bg.innerHTML = `<div class="sheet"><div class="grab"></div>${html}</div>`;
+  { const sh = bg.querySelector(".sheet"); dragToClose(sh.querySelector(".grab"), sh, () => bg.remove()); }
   bg.addEventListener("click", e => {
     if(e.target === bg){ bg.remove(); return; }
     const it = e.target.closest("[data-s]"); if(!it) return;
@@ -2135,7 +2201,7 @@ function collTracks(r){
   if(k==="artist") return [...new Set(artists.find(x=>x.name===a)?.tracks||[])];
   if(k==="playlist") return plTracks(a);
   if(k==="smart") return SMART[a]?.get() || [];
-  if(k==="genre") return tracks.filter(t=>sameGenre(t.genre, a));
+  if(k==="genre") return tracks.filter(t=>sameGenre(genreOf(t), a));
   return [];
 }
 function collSheet(r){
@@ -2641,6 +2707,32 @@ let ignorePop = false;
 function closeFull(fromPop){ if(!$("#full").classList.contains("open")) return; $("#full").classList.remove("open"); document.body.classList.remove("lock"); if(!fromPop && history.state?.k==="full"){ ignorePop = true; history.back(); } }
 $("#openFull").onclick = $("#miniCv").onclick = openFull;
 $("#closeFull").onclick = () => closeFull();
+/* ---- glisser vers le bas pour fermer (lecteur plein écran et fenêtres), le doigt sur la barre du haut ---- */
+function dragToClose(handle, panel, onClose, getStartOk){
+  let y0 = 0, t0 = 0, dy = 0, on = false, moved = false;
+  handle.style.touchAction = "none";
+  handle.addEventListener("pointerdown", e => {
+    if(getStartOk && !getStartOk(e)) return;
+    on = true; moved = false; y0 = e.clientY; t0 = performance.now(); dy = 0;
+    panel.style.transition = "none"; handle.setPointerCapture?.(e.pointerId);
+  });
+  handle.addEventListener("pointermove", e => {
+    if(!on) return; dy = Math.max(0, e.clientY - y0); if(dy > 4) moved = true;
+    panel.style.transform = `translateY(${dy}px)`;
+  });
+  const end = () => {
+    if(!on) return; on = false;
+    const v = dy / Math.max(1, performance.now() - t0);
+    panel.style.transition = "transform .28s cubic-bezier(.2,.8,.2,1)";
+    if(dy > Math.min(160, innerHeight * .22) || (v > .6 && dy > 30)){
+      panel.style.transform = `translateY(${innerHeight}px)`;
+      setTimeout(() => { onClose(); panel.style.transition = ""; panel.style.transform = ""; }, 240);
+    } else { panel.style.transform = ""; setTimeout(() => { panel.style.transition = ""; }, 300); }
+  };
+  handle.addEventListener("pointerup", end); handle.addEventListener("pointercancel", end);
+  handle.addEventListener("click", e => { if(moved){ e.stopPropagation(); e.preventDefault(); moved = false; } }, true);
+}
+dragToClose($("#closeFull"), $("#full"), () => closeFull());
 let ty = null;
 $("#full").addEventListener("touchstart", e => { if(e.target.closest("input,.fpanel,.handle")) { ty=null; return; } ty = e.touches[0].clientY; }, { passive:true });
 $("#full").addEventListener("touchend", e => { if(ty!==null && e.changedTouches[0].clientY-ty > 110) closeFull(); ty = null; });
@@ -4397,7 +4489,7 @@ async function uploadOne(f, prog){
 if("serviceWorker" in navigator && (location.protocol==="https:" || location.hostname==="localhost")) navigator.serviceWorker.register("sw.js").catch(()=>{});
 
 /* ============ mises à jour : sur iPhone l'app reste ouverte des jours, on vérifie à chaque retour ============ */
-const ECHO_BUILD = "2026-10-24.1";
+const ECHO_BUILD = "2026-10-24.4";
 let updPending = false, lastUpdCheck = 0;
 async function checkUpdate(){
   if(!navigator.onLine || Date.now() - lastUpdCheck < 60e3) return; lastUpdCheck = Date.now();
